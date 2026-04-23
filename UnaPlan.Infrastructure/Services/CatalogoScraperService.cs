@@ -67,8 +67,17 @@ public class CatalogoScraperService
     private DriveService GetDriveService()
     {
         GoogleCredential credential;
-        // Busca el archivo que configuramos en la raíz del proyecto API
-        using (var stream = new FileStream("google-credentials.json", FileMode.Open, FileAccess.Read))
+        
+        // 1. Ruta oficial segura en los servidores de Render
+        string rutaCredenciales = "/etc/secrets/google-credentials.json";
+
+        // 2. Si el archivo no está ahí (porque estás probando en tu PC con Windows), usa la ruta local
+        if (!File.Exists(rutaCredenciales))
+        {
+            rutaCredenciales = "google-credentials.json";
+        }
+
+        using (var stream = new FileStream(rutaCredenciales, FileMode.Open, FileAccess.Read))
         {
             credential = GoogleCredential.FromStream(stream)
                 .CreateScoped(DriveService.Scope.DriveReadonly);
