@@ -1,5 +1,5 @@
-# 1. Etapa de compilación
-FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
+# 1. Etapa de compilación (¡Actualizado a .NET 9.0!)
+FROM mcr.microsoft.com/dotnet/sdk:9.0 AS build
 WORKDIR /src
 
 # Copiar la solución principal
@@ -20,8 +20,8 @@ COPY . .
 WORKDIR "/src/UnaPlan.Api"
 RUN dotnet publish "UnaPlan.Api.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
-# 2. Etapa de ejecución (Runtime)
-FROM mcr.microsoft.com/dotnet/aspnet:8.0
+# 2. Etapa de ejecución (Runtime - ¡Actualizado a .NET 9.0!)
+FROM mcr.microsoft.com/dotnet/aspnet:9.0
 WORKDIR /app
 COPY --from=build /app/publish .
 
@@ -29,5 +29,5 @@ COPY --from=build /app/publish .
 ENV ASPNETCORE_URLS=http://+:10000
 EXPOSE 10000
 
-# Encender el motor (Tu DLL se llama UnaPlan.Api.dll basado en tu .csproj)
+# Encender el motor
 ENTRYPOINT ["dotnet", "UnaPlan.Api.dll"]
