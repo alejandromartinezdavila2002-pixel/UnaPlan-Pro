@@ -1,23 +1,33 @@
-# 1. Imagen de SDK para compilar
+# 1. Etapa de compilación
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
-WORKDIR /app
+WORKDIR /src
 
-# Copiar archivos y restaurar dependencias
-COPY *.sln .
-COPY *.csproj .
-RUN dotnet restore
+# Copiar el archivo de solución
+COPY ["UnaPlanProject.sln", "./"]
 
-# Copiar todo y publicar
+# Copiar los archivos de proyecto (.csproj) recreando sus carpetas
+COPY ["UnaPlan.Api/UnaPlan.Api.csproj", "UnaPlan.Api/"]
+COPY ["UnaPlan.Core/UnaPlan.Core.csproj", "UnaPlan.Core/"]
+COPY ["UnaPlan.Infrastructure/UnaPlan.Infrastructure.csproj", "UnaPlan.Infrastructure/"]
+
+# Restaurar todas las dependencias
+RUN dotnet restore "UnaPlanProject.sln"
+
+# Copiar el resto del código de todas las carpetas
 COPY . .
-RUN dotnet publish -c Release -o out
 
-# 2. Imagen de Runtime para correr la app
+# Publicar solo el proyecto de la API
+WORKDIR "/src/UnaPlan.Api"
+RUN dotnet publish "UnaPlan.Api.csproj" -c Release -o /app/publish
+
+# 2. Etapa final (Runtime)
 FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app
-COPY --from=build /app/out .
+COPY --from=build /app/publish .
 
 # Configurar el puerto para Render
 ENV ASPNETCORE_URLS=http://+:10000
 EXPOSE 10000
 
-ENTRYPOINT ["dotnet", "UnaPlan.dll"]
+# IMPORTANTE: Verifica que el nombre de la DLL sea UnaPlan.Api.dll
+ENTRYPOINT ["dotnet", "UnaPlan.Api.dll"]
