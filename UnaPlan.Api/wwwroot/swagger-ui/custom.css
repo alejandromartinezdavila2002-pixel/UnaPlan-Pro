@@ -1,0 +1,164 @@
+﻿/* ==========================================================================
+   TEMA: UNA PLAN - DARK PREMIUM SCALABLE
+   Inspiración: Cursor / Vercel / GitHub Dark
+   ========================================================================== */
+
+/* 1. IMPORTAR TIPOGRAFÍAS DE ÉLITE */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&family=JetBrains+Mono:wght@400;700&display=swap');
+
+/* 2. FONDO Y TEXTO GLOBAL */
+body, .swagger-ui {
+    background-color: #0b0f19 !important; /* Fondo azul noche ultra oscuro */
+    color: #8b949e !important;
+    font-family: 'Inter', sans-serif !important;
+}
+
+    /* 3. TÍTULOS Y CABECERAS */
+    .swagger-ui .info .title {
+        color: #ffffff !important;
+        font-weight: 700 !important;
+        letter-spacing: -0.5px;
+    }
+
+    .swagger-ui .info p, .swagger-ui .info li {
+        color: #a5b4fc !important;
+    }
+
+    /* 4. LOS TAGS (Agrupadores: Catálogo, Admin) */
+    .swagger-ui .opblock-tag {
+        background-color: transparent !important;
+        color: #ffffff !important;
+        font-size: 1.5rem !important;
+        border-bottom: 2px solid #1e293b !important;
+        padding-bottom: 10px;
+        margin-top: 30px;
+        transition: color 0.3s ease;
+    }
+
+        .swagger-ui .opblock-tag:hover {
+            color: #60a5fa !important;
+        }
+
+    /* 5. DISEÑO DE LOS ENDPOINTS (Efecto Flotante) */
+    .swagger-ui .opblock {
+        background: rgba(30, 41, 59, 0.4) !important; /* Transparencia sutil */
+        border: 1px solid #334155 !important;
+        border-radius: 12px !important;
+        box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06) !important;
+        transition: transform 0.2s ease, box-shadow 0.2s ease !important;
+        backdrop-filter: blur(8px);
+    }
+
+        .swagger-ui .opblock:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3) !important;
+        }
+
+        /* --- COLORES SEMÁNTICOS TIPO VS CODE / CURSOR --- */
+        /* GET (Azul Neón) */
+        .swagger-ui .opblock.opblock-get {
+            border-color: rgba(59, 130, 246, 0.4) !important;
+            background: rgba(59, 130, 246, 0.05) !important;
+        }
+
+            .swagger-ui .opblock.opblock-get .opblock-summary-method {
+                background: #3b82f6 !important;
+                border-radius: 6px;
+            }
+
+        /* POST (Verde Esmeralda) */
+        .swagger-ui .opblock.opblock-post {
+            border-color: rgba(16, 185, 129, 0.4) !important;
+            background: rgba(16, 185, 129, 0.05) !important;
+        }
+
+            .swagger-ui .opblock.opblock-post .opblock-summary-method {
+                background: #10b981 !important;
+                border-radius: 6px;
+            }
+
+        /* DELETE (Rojo Carmesí) */
+        .swagger-ui .opblock.opblock-delete {
+            border-color: rgba(239, 68, 68, 0.4) !important;
+            background: rgba(239, 68, 68, 0.05) !important;
+        }
+
+            .swagger-ui .opblock.opblock-delete .opblock-summary-method {
+                background: #ef4444 !important;
+                border-radius: 6px;
+            }
+
+        /* Texto de las rutas */
+        .swagger-ui .opblock .opblock-summary-path {
+            color: #f8fafc !important;
+            font-family: 'JetBrains Mono', monospace !important;
+        }
+
+        .swagger-ui .opblock .opblock-summary-description {
+            color: #94a3b8 !important;
+        }
+
+    /* 6. CAJAS DE JSON Y CÓDIGO (Tipografía Hacker) */
+    .swagger-ui .model-box, .swagger-ui textarea.curl {
+        background-color: #0f172a !important;
+        border: 1px solid #1e293b !important;
+        border-radius: 8px !important;
+        font-family: 'JetBrains Mono', monospace !important;
+        color: #e2e8f0 !important;
+    }
+
+    /* 7. BOTONES DE ACCIÓN (Gradientes Premium) */
+    .swagger-ui .btn.execute {
+        background: linear-gradient(135deg, #6366f1 0%, #3b82f6 100%) !important;
+        color: #ffffff !important;
+        border: none !important;
+        border-radius: 8px !important;
+        font-weight: 600 !important;
+        box-shadow: 0 4px 14px 0 rgba(99, 102, 241, 0.39) !important;
+        transition: all 0.3s ease;
+    }
+
+        .swagger-ui .btn.execute:hover {
+            box-shadow: 0 6px 20px rgba(99, 102, 241, 0.6) !important;
+            transform: translateY(-1px);
+        }
+
+    .swagger-ui .btn.try-out__btn {
+        color: #3b82f6 !important;
+        border: 1px solid #3b82f6 !important;
+        border-radius: 6px !important;
+    }
+
+    /* 8. CAMPOS DE INPUT / TEXTAREA */
+    .swagger-ui input, .swagger-ui textarea, .swagger-ui select {
+        background-color: #0f172a !important;
+        color: #f1f5f9 !important;
+        border: 1px solid #334155 !important;
+        border-radius: 6px !important;
+        padding: 8px 12px !important;
+    }
+
+        .swagger-ui input:focus, .swagger-ui textarea:focus {
+            border-color: #3b82f6 !important;
+            outline: none !important;
+            box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2) !important;
+        }
+
+/* 9. SCROLLBAR PERSONALIZADO (Chrome/Edge/Safari) */
+::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0b0f19;
+}
+
+::-webkit-scrollbar-thumb {
+    background: #334155;
+    border-radius: 5px;
+}
+
+    ::-webkit-scrollbar-thumb:hover {
+        background: #475569;
+    }
