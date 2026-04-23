@@ -101,6 +101,10 @@ app.MapPost("/api/calendarios/preview", async (IFormFile archivoPdf, PdfExtracto
 
     var resultadoPreview = extractor.ProcesarCalendarioPdf(rutaTemporal);
 
+    // ¡AQUÍ ESTÁ LA MAGIA! 🪄
+    // Pisamos el nombre temporal feo con el nombre real del archivo que subiste desde tu PC
+    resultadoPreview.NombreArchivo = archivoPdf.FileName;
+
     if (File.Exists(rutaTemporal))
     {
         File.Delete(rutaTemporal);
