@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using UnaPlan.Core.Entities;
@@ -274,8 +274,11 @@ app.MapGet("/api/admin/preview-catalogo", async (CatalogoScraperService scraper)
 .WithDescription("Analiza todos los enlaces de Drive estáticos, fusiona las materias duplicadas usando su código de 3 dígitos, y muestra un JSON limpio listo para ser insertado en Supabase.");
 
 // ---> 2. GUARDAR TODO EL CATÁLOGO EN LA BASE DE DATOS
-app.MapPost("/api/admin/confirmar-catalogo", async ([FromBody] List<CatalogoPreviewDto> datos, CatalogoScraperService scraper) =>
+app.MapPost("/api/admin/confirmar-catalogo", async ([FromBody] CatalogoResponseWrapper peticion, CatalogoScraperService scraper) =>
 {
+    // Extraemos la lista de la envoltura que envía Swagger
+    var datos = peticion.Datos;
+
     if (datos == null || !datos.Any())
         return Results.BadRequest("No se proporcionaron datos para guardar.");
 
@@ -291,9 +294,7 @@ app.MapPost("/api/admin/confirmar-catalogo", async ([FromBody] List<CatalogoPrev
 })
 .WithTags("6. Panel de Administración")
 .WithSummary("2. Confirmar y Guardar en Supabase")
-.WithDescription("Recibe el JSON generado por el endpoint de previsualización y lo inserta permanentemente en las tablas de Planes y Materiales.");
-
-
+.WithDescription("Recibe el JSON completo generado por el endpoint de previsualización (incluyendo mensaje y total) y lo inserta permanentemente en las tablas de Planes y Materiales.");
 // ---> 3. VACIAR TODA LA BASE DE DATOS (Peligro)
 app.MapDelete("/api/admin/limpiar-catalogo", async (CatalogoScraperService scraper) =>
 {
@@ -397,6 +398,17 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 .WithDescription("Recibe las materias inscritas por el estudiante, genera un archivo Excel en memoria y se lo envía automáticamente por correo electrónico.");
 
 app.Run();
+
+
+
+public class CatalogoResponseWrapper
+{
+    public string? Mensaje { get; set; }
+    public int? TotalDrivesAnalizados { get; set; }
+
+    // Aquí es donde viajará tu lista de materias
+    public List<UnaPlan.Core.Entities.CatalogoPreviewDto> Datos { get; set; } = new();
+}
 
 
 public class SolicitudPlanDto
