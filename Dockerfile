@@ -2,25 +2,25 @@
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
 
-# Copiar el archivo de solución
+# Copiar la solución principal
 COPY ["UnaPlanProject.sln", "./"]
 
-# Copiar los archivos de proyecto (.csproj) recreando sus carpetas
+# Copiar las tres capas del proyecto respetando sus carpetas
 COPY ["UnaPlan.Api/UnaPlan.Api.csproj", "UnaPlan.Api/"]
 COPY ["UnaPlan.Core/UnaPlan.Core.csproj", "UnaPlan.Core/"]
 COPY ["UnaPlan.Infrastructure/UnaPlan.Infrastructure.csproj", "UnaPlan.Infrastructure/"]
 
-# Restaurar todas las dependencias
+# Restaurar paquetes de Nuget
 RUN dotnet restore "UnaPlanProject.sln"
 
-# Copiar el resto del código de todas las carpetas
+# Copiar absolutamente todo el resto del código
 COPY . .
 
-# Publicar solo el proyecto de la API
+# Compilar y publicar la API
 WORKDIR "/src/UnaPlan.Api"
-RUN dotnet publish "UnaPlan.Api.csproj" -c Release -o /app/publish
+RUN dotnet publish "UnaPlan.Api.csproj" -c Release -o /app/publish /p:UseAppHost=false
 
-# 2. Etapa final (Runtime)
+# 2. Etapa de ejecución (Runtime)
 FROM mcr.microsoft.com/dotnet/aspnet:8.0
 WORKDIR /app
 COPY --from=build /app/publish .
@@ -29,5 +29,5 @@ COPY --from=build /app/publish .
 ENV ASPNETCORE_URLS=http://+:10000
 EXPOSE 10000
 
-# IMPORTANTE: Verifica que el nombre de la DLL sea UnaPlan.Api.dll
+# Encender el motor (Tu DLL se llama UnaPlan.Api.dll basado en tu .csproj)
 ENTRYPOINT ["dotnet", "UnaPlan.Api.dll"]
