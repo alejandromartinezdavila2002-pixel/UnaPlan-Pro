@@ -401,6 +401,34 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 .WithSummary("Generar y enviar Plan de Evaluación en Excel")
 .WithDescription("Recibe las materias inscritas por el estudiante, genera un archivo Excel en memoria y se lo envía automáticamente por correo electrónico.");
 
+
+// ---> ENDPOINT MÁGICO PARA ENGAÑAR A EXCEL Y ABRIR GOOGLE DRIVE
+app.MapGet("/api/go", (string target) =>
+{
+    if (string.IsNullOrEmpty(target)) 
+        return Results.BadRequest("URL no válida");
+
+    // Creamos una página web invisible que Excel sí acepta
+    string html = $@"
+    <!DOCTYPE html>
+    <html lang='es'>
+    <head>
+        <meta charset='UTF-8'>
+        <meta http-equiv='refresh' content='0; url={target}'>
+        <script>window.location.replace('{target}');</script>
+        <title>Redirigiendo...</title>
+    </head>
+    <body style='font-family: Arial, sans-serif; text-align: center; margin-top: 50px;'>
+        <h2>Abriendo Google Drive... 🚀</h2>
+        <p>Cargando tu material de la UNA. Si no abre en 3 segundos, <a href='{target}'>haz clic aquí</a>.</p>
+    </body>
+    </html>";
+
+    return Results.Content(html, "text/html");
+})
+.ExcludeFromDescription(); // Esto hace que no se muestre en Swagger para mantenerlo limpio
+
+
 app.Run();
 
 
