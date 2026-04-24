@@ -32,11 +32,13 @@ builder.Services.AddSwaggerGen(options =>
         }
     });
 });
-// ========================================================================
-// 2. BASE DE DATOS Y DEPENDENCIAS
-// ========================================================================
-builder.Services.AddDbContext<AppDbContext>(options =>
-    options.UseNpgsql(builder.Configuration.GetConnectionString("SupabaseConnection")));
+
+
+// 2 
+// Usamos el nombre exacto de tu configuración: "SupabaseConnection"
+builder.Services.AddDbContextPool<AppDbContext>(options =>
+    options.UseNpgsql(builder.Configuration.GetConnectionString("SupabaseConnection")),
+    poolSize: 100);
 
 // Agregamos el servicio de extracción de PDFs 
 builder.Services.AddScoped<PdfExtractorService>();
@@ -47,6 +49,10 @@ builder.Services.AddScoped<CatalogoScraperService>();
 // Agregamos el servicio de generación de Excel y envío de correos
 builder.Services.AddScoped<ExcelGeneratorService>();
 builder.Services.AddScoped<EmailService>();
+
+
+// Registra el trabajador en segundo plano
+builder.Services.AddHostedService<SupabaseKeepAliveService>();
 
 
 // ¡AQUÍ SE CONSTRUYE LA APP! (Ya no se pueden agregar más servicios al builder)
@@ -85,6 +91,7 @@ app.UseHttpsRedirection();
 // ========================================================================
 
 // ---> ENDPOINT 1: PREVISUALIZAR
+// ---> ENDPOINT 1: PREVISUALIZAR
 app.MapPost("/api/calendarios/preview", async (IFormFile archivoPdf, PdfExtractorService extractor) =>
 {
     if (archivoPdf == null || archivoPdf.Length == 0)
@@ -100,6 +107,10 @@ app.MapPost("/api/calendarios/preview", async (IFormFile archivoPdf, PdfExtracto
     }
 
     var resultadoPreview = extractor.ProcesarCalendarioPdf(rutaTemporal);
+
+    // ¡AQUÍ ESTÁ LA MAGIA! 🪄
+    // Pisamos el nombre temporal feo con el nombre real del archivo que subiste desde tu PC
+    resultadoPreview.NombreArchivo = archivoPdf.FileName;
 
     if (File.Exists(rutaTemporal))
     {
@@ -274,8 +285,11 @@ app.MapGet("/api/admin/preview-catalogo", async (CatalogoScraperService scraper)
 .WithDescription("Analiza todos los enlaces de Drive estáticos, fusiona las materias duplicadas usando su código de 3 dígitos, y muestra un JSON limpio listo para ser insertado en Supabase.");
 
 // ---> 2. GUARDAR TODO EL CATÁLOGO EN LA BASE DE DATOS
-app.MapPost("/api/admin/confirmar-catalogo", async ([FromBody] List<CatalogoPreviewDto> datos, CatalogoScraperService scraper) =>
+app.MapPost("/api/admin/confirmar-catalogo", async ([FromBody] CatalogoResponseWrapper peticion, CatalogoScraperService scraper) =>
 {
+    // Extraemos la lista de la envoltura que envía Swagger
+    var datos = peticion.Datos;
+
     if (datos == null || !datos.Any())
         return Results.BadRequest("No se proporcionaron datos para guardar.");
 
@@ -291,9 +305,7 @@ app.MapPost("/api/admin/confirmar-catalogo", async ([FromBody] List<CatalogoPrev
 })
 .WithTags("6. Panel de Administración")
 .WithSummary("2. Confirmar y Guardar en Supabase")
-.WithDescription("Recibe el JSON generado por el endpoint de previsualización y lo inserta permanentemente en las tablas de Planes y Materiales.");
-
-
+.WithDescription("Recibe el JSON completo generado por el endpoint de previsualización (incluyendo mensaje y total) y lo inserta permanentemente en las tablas de Planes y Materiales.");
 // ---> 3. VACIAR TODA LA BASE DE DATOS (Peligro)
 app.MapDelete("/api/admin/limpiar-catalogo", async (CatalogoScraperService scraper) =>
 {
@@ -396,7 +408,46 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 .WithSummary("Generar y enviar Plan de Evaluación en Excel")
 .WithDescription("Recibe las materias inscritas por el estudiante, genera un archivo Excel en memoria y se lo envía automáticamente por correo electrónico.");
 
+
+// ---> ENDPOINT MÁGICO PARA ENGAÑAR A EXCEL Y ABRIR GOOGLE DRIVE
+app.MapGet("/api/go", (string target) =>
+{
+    if (string.IsNullOrEmpty(target))
+        return Results.BadRequest("URL no válida");
+
+    // Creamos una página web invisible que Excel sí acepta
+    string html = $@"
+    <!DOCTYPE html>
+    <html lang='es'>
+    <head>
+        <meta charset='UTF-8'>
+        <meta http-equiv='refresh' content='0; url={target}'>
+        <script>window.location.replace('{target}');</script>
+        <title>Redirigiendo...</title>
+    </head>
+    <body style='font-family: Arial, sans-serif; text-align: center; margin-top: 50px;'>
+        <h2>Abriendo Google Drive... 🚀</h2>
+        <p>Cargando tu material de la UNA. Si no abre en 3 segundos, <a href='{target}'>haz clic aquí</a>.</p>
+    </body>
+    </html>";
+
+    return Results.Content(html, "text/html");
+})
+.ExcludeFromDescription(); // Esto hace que no se muestre en Swagger para mantenerlo limpio
+
+
 app.Run();
+
+
+
+public class CatalogoResponseWrapper
+{
+    public string? Mensaje { get; set; }
+    public int? TotalDrivesAnalizados { get; set; }
+
+    // Aquí es donde viajará tu lista de materias
+    public List<UnaPlan.Core.Entities.CatalogoPreviewDto> Datos { get; set; } = new();
+}
 
 
 public class SolicitudPlanDto
