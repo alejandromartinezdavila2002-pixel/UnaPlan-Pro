@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
 using UnaPlan.Core.Entities;
@@ -412,7 +412,11 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 // ---> ENDPOINT MÁGICO PARA ENGAÑAR A EXCEL Y ABRIR GOOGLE DRIVE
 app.MapGet("/api/go", (string target) =>
 {
+<<<<<<< HEAD
     if (string.IsNullOrEmpty(target))
+=======
+    if (string.IsNullOrEmpty(target)) 
+>>>>>>> b522a322271e3a3bf0a4e024cdccc9689b3386b4
         return Results.BadRequest("URL no válida");
 
     // Creamos una página web invisible que Excel sí acepta

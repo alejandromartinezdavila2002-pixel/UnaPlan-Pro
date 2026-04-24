@@ -67,11 +67,19 @@ public class CatalogoScraperService
     private DriveService GetDriveService()
     {
         GoogleCredential credential;
+<<<<<<< HEAD
 
         // 1. Ruta oficial segura en los servidores de Render
         string rutaCredenciales = "/etc/secrets/google-credentials.json";
 
         // 2. Si el archivo no está ahí (porque estamos probando con Windows), usa la ruta local.
+=======
+        
+        // 1. Ruta oficial segura en los servidores de Render
+        string rutaCredenciales = "/etc/secrets/google-credentials.json";
+
+        // 2. Si el archivo no está ahí (porque estás probando en tu PC con Windows), usa la ruta local
+>>>>>>> b522a322271e3a3bf0a4e024cdccc9689b3386b4
         if (!File.Exists(rutaCredenciales))
         {
             rutaCredenciales = "google-credentials.json";
