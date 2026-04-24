@@ -435,6 +435,8 @@ app.MapGet("/api/go", (string target) =>
 })
 .ExcludeFromDescription(); // Esto hace que no se muestre en Swagger para mantenerlo limpio
 
+app.MapGet("/api/ping", () => Results.Ok(new { mensaje = "API Despierta y lista" }))
+   .ExcludeFromDescription();
 
 app.Run();
 
