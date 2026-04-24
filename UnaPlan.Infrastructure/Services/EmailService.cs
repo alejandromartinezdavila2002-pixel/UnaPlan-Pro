@@ -1,4 +1,4 @@
-﻿using MailKit.Net.Smtp;
+using MailKit.Net.Smtp;
 using MailKit.Security;
 using Microsoft.Extensions.Configuration;
 using MimeKit;
@@ -14,7 +14,7 @@ public class EmailService
         _config = config;
     }
 
-    public async Task EnviarPlanPersonalizadoAsync(string correoDestino, string nombreEstudiante, byte[] archivoExcel)
+    public async Task EnviarPlanPersonalizadoAsync(string correoDestino, string nombreEstudiante, byte[] archivoExcel, List<string> materiasFaltantes)
     {
         var email = new MimeMessage();
 
@@ -26,12 +26,28 @@ public class EmailService
         email.To.Add(new MailboxAddress(nombreEstudiante, correoDestino));
         email.Subject = $"🎓 Tu Plan de Evaluación Personalizado UNA - {DateTime.Now.Year}";
 
-        // 2. Creamos el cuerpo del correo
+        // 2. Creamos la alerta visual si faltan materias (Teoría de Conjuntos)
+        string advertenciaMaterias = "";
+
+        if (materiasFaltantes != null && materiasFaltantes.Any())
+        {
+            string codigosPerdidos = string.Join(", ", materiasFaltantes);
+            advertenciaMaterias = $@"
+                <div style='background-color: #ffebee; color: #c62828; padding: 15px; border-radius: 5px; margin-top: 20px; border-left: 5px solid #d32f2f;'>
+                    <strong>⚠️ Nota Importante:</strong> No pudimos encontrar el plan de evaluación ni el material para las siguientes materias: <b>{codigosPerdidos}</b>. <br>
+                    Es posible que aún no estén en nuestra base de datos oficial o el código ingresado sea incorrecto.
+                </div>";
+        }
+
+        // 3. Creamos el cuerpo del correo y le inyectamos la advertencia si existe
         var builder = new BodyBuilder();
         builder.HtmlBody = $@"
             <div style='font-family: Arial, sans-serif; color: #333;'>
                 <h2>¡Hola, {nombreEstudiante}!</h2>
                 <p>Tu solicitud ha sido procesada con éxito. Adjunto a este correo encontrarás tu <strong>Plan de Evaluación Personalizado</strong> en formato Excel.</p>
+                
+                {advertenciaMaterias}
+
                 <p>Este archivo contiene:</p>
                 <ul>
                     <li>Las fechas de entrega extraídas directamente de los Planes de Curso oficiales.</li>
@@ -40,15 +56,15 @@ public class EmailService
                 </ul>
                 <p>¡Mucho éxito en este semestre!</p>
                 <br/>
-                <small>Este es un correo automatizado generado por el sistema UnaPlan.</small>
+                <small>Este es un correo automatizado generado por el sistema UnaPlan. Por favor no respondas a este mensaje.</small>
             </div>";
 
-        // 3. Adjuntamos el Excel que viene desde la memoria RAM
+        // 4. Adjuntamos el Excel que viene desde la memoria RAM
         builder.Attachments.Add("Mi_Plan_De_Evaluacion_UNA.xlsx", archivoExcel, ContentType.Parse("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
 
         email.Body = builder.ToMessageBody();
 
-        // 4. Conectamos al servidor SMTP y enviamos
+        // 5. Conectamos al servidor SMTP y enviamos
         using var smtp = new SmtpClient();
         try
         {
