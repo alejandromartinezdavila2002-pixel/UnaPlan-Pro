@@ -5,7 +5,6 @@ using UnaPlan.Core.Entities;
 using UnaPlan.Infrastructure.Data;
 using UnaPlan.Infrastructure.Services;
 
-
 var builder = WebApplication.CreateBuilder(args);
 
 // ========================================================================
@@ -20,7 +19,7 @@ builder.Services.AddSwaggerGen(options =>
     {
         Title = "UnaPlan API - Motor de Extracción",
         Version = "v1",
-                Description = @"# 👨‍💻 Johan Alejandro Martínez Dávila
+        Description = @"# 👨‍💻 Johan Alejandro Martínez Dávila
         *Estudiante de Ingeniería de Sistemas | Especialista en Arquitectura .NET (En proceso)*
 
         ---
@@ -90,7 +89,6 @@ app.UseHttpsRedirection();
 // 4. ENDPOINTS (Rutas de la API)
 // ========================================================================
 
-// ---> ENDPOINT 1: PREVISUALIZAR
 // ---> ENDPOINT 1: PREVISUALIZAR
 app.MapPost("/api/calendarios/preview", async (IFormFile archivoPdf, PdfExtractorService extractor) =>
 {
@@ -306,6 +304,7 @@ app.MapPost("/api/admin/confirmar-catalogo", async ([FromBody] CatalogoResponseW
 .WithTags("6. Panel de Administración")
 .WithSummary("2. Confirmar y Guardar en Supabase")
 .WithDescription("Recibe el JSON completo generado por el endpoint de previsualización (incluyendo mensaje y total) y lo inserta permanentemente en las tablas de Planes y Materiales.");
+
 // ---> 3. VACIAR TODA LA BASE DE DATOS (Peligro)
 app.MapDelete("/api/admin/limpiar-catalogo", async (CatalogoScraperService scraper) =>
 {
@@ -328,46 +327,47 @@ app.MapDelete("/api/admin/limpiar-catalogo", async (CatalogoScraperService scrap
 // 5. ENDPOINTS PÚBLICOS (Para Estudiantes)
 // ========================================================================
 
-// DTO para recibir los datos del estudiante
-
 app.MapPost("/api/estudiantes/solicitar-plan", async (
     [FromBody] SolicitudPlanDto solicitud,
     AppDbContext db,
     ExcelGeneratorService excelService,
     EmailService emailService) =>
 {
-    // 1. Validación inicial: ¿Viene texto nulo o completamente vacío?
+    // 1. Validación inicial
     if (string.IsNullOrWhiteSpace(solicitud.CodigosMaterias))
         return Results.BadRequest("Debes proporcionar al menos un código de materia.");
 
     try
     {
-        // 2. LA MAGIA MEJORADA: Un parser indestructible para los códigos de materia
-        char[] separadores = { ',', '.', ' ', '-', ';' }; // Todos los caracteres que el usuario podría usar por error
+        // 2. PARSER INDESTRUCTIBLE
+        char[] separadores = { ',', '.', ' ', '-', ';' };
 
         List<string> listaMaterias = solicitud.CodigosMaterias
-            .Split(separadores, StringSplitOptions.RemoveEmptyEntries) // Pica por cualquiera de esos símbolos e ignora los vacíos
-            .Select(m => m.Trim()) // Por si acaso queda algún espacio fantasma
-            .Distinct() // ¡Toque de Arquitecto! Si el estudiante pone "107, 107", lo procesamos una sola vez
+            .Split(separadores, StringSplitOptions.RemoveEmptyEntries)
+            .Select(m => m.Trim())
+            .Distinct()
             .ToList();
 
-        // Segunda validación de seguridad
         if (!listaMaterias.Any())
             return Results.BadRequest("El formato de los códigos proporcionados no es válido o está vacío.");
 
-        // 3. Buscamos en BD ultrarrápido (Usando la nueva 'listaMaterias')
+        // 3. Búsqueda en BD
         var materiasBd = await db.PlanesDeCurso
             .Include(p => p.MaterialesDeApoyo)
-            .Include(p => p.Evaluaciones) 
-            .Where(p => listaMaterias.Contains(p.CodigoMateria)) // <-- Aquí usamos la lista limpia
+            .Include(p => p.Evaluaciones)
+            .Where(p => listaMaterias.Contains(p.CodigoMateria))
             .ToListAsync();
 
         if (!materiasBd.Any())
             return Results.NotFound("No se encontraron las materias en el catálogo oficial.");
 
+        // 4. DETECTAR MATERIAS FALTANTES (Teoría de Conjuntos)
+        var codigosEncontrados = materiasBd.Select(m => m.CodigoMateria).ToList();
+        List<string> materiasNoEncontradas = listaMaterias.Except(codigosEncontrados).ToList();
+
         var listaParaExcel = new List<ExcelGeneratorService.MateriaPlanillaDto>();
 
-        // 4. Mapeamos directamente desde la Base de Datos
+        // 5. Mapeo para Excel
         foreach (var materia in materiasBd)
         {
             if (materia.Evaluaciones != null && materia.Evaluaciones.Any())
@@ -379,7 +379,7 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
                         Codigo = materia.CodigoMateria,
                         Nombre = eval.NombreMateria,
                         TipoEvaluacion = eval.Tipo,
-                        FechaEntrega = eval.FechaEntrega.ToString("dd/MM/yyyy"), // Formato limpio
+                        FechaEntrega = eval.FechaEntrega.ToString("dd/MM/yyyy"),
                         UrlPlan = materia.UrlDocumento,
                         UrlsMateriales = materia.MaterialesDeApoyo.Select(m => m.UrlDrive).ToList()
                     });
@@ -387,7 +387,7 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
             }
             else
             {
-                // Fallback por si la materia aún no tiene fechas extraídas
+                // Fallback
                 listaParaExcel.Add(new ExcelGeneratorService.MateriaPlanillaDto
                 {
                     Codigo = materia.CodigoMateria,
@@ -400,20 +400,20 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
             }
         }
 
-        // 5. Generamos Excel en Memoria
+        // 6. Generamos Excel en Memoria
         var archivoExcelBytes = excelService.GenerarPlanDeEvaluacionExcel(listaParaExcel);
 
-        // 6. Enviamos Correo
+        // 7. Enviamos Correo (¡AHORA PASAMOS LA LISTA DE FALTANTES!)
         await emailService.EnviarPlanPersonalizadoAsync(
             solicitud.CorreoElectronico,
             solicitud.NombreCompleto,
-            archivoExcelBytes);
+            archivoExcelBytes,
+            materiasNoEncontradas);
 
         return Results.Ok(new { mensaje = $"¡Plan generado! Se ha enviado el Excel a {solicitud.CorreoElectronico}" });
     }
     catch (Exception ex)
     {
-        // En producción, podrías querer guardar este error en un log (ej: Serilog)
         return Results.Problem($"Ocurrió un error al procesar tu plan: {ex.Message}");
     }
 })
@@ -452,8 +452,9 @@ app.MapGet("/api/ping", () => Results.Ok(new { mensaje = "API Despierta y lista"
 
 app.Run();
 
-
-
+// ========================================================================
+// CLASES Y DTOS
+// ========================================================================
 public class CatalogoResponseWrapper
 {
     public string? Mensaje { get; set; }
@@ -462,7 +463,6 @@ public class CatalogoResponseWrapper
     // Aquí es donde viajará tu lista de materias
     public List<UnaPlan.Core.Entities.CatalogoPreviewDto> Datos { get; set; } = new();
 }
-
 
 public class SolicitudPlanDto
 {
