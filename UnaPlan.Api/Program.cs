@@ -404,7 +404,7 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
         return Results.Problem($"Ocurrió un error al procesar tu plan: {ex.Message}");
     }
 })
-.WithTags("6. Servicios para Estudiantes")
+.WithTags("7. Servicios para Estudiantes")
 .WithSummary("Generar y enviar Plan de Evaluación en Excel")
 .WithDescription("Recibe las materias inscritas por el estudiante, genera un archivo Excel en memoria y se lo envía automáticamente por correo electrónico.");
 
