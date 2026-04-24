@@ -342,16 +342,18 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 
     try
     {
-        // 2. LA MAGIA: Convertimos el texto crudo ("107, 300") en una lista de C# limpia
+        // 2. LA MAGIA MEJORADA: Un parser indestructible para los códigos de materia
+        char[] separadores = { ',', '.', ' ', '-', ';' }; // Todos los caracteres que el usuario podría usar por error
+
         List<string> listaMaterias = solicitud.CodigosMaterias
-            .Split(',') // Picamos por la coma
-            .Select(m => m.Trim()) // Quitamos espacios a los lados (ej: " 300 " -> "300")
-            .Where(m => !string.IsNullOrWhiteSpace(m)) // Ignoramos pedazos vacíos si hay comas extra
+            .Split(separadores, StringSplitOptions.RemoveEmptyEntries) // Pica por cualquiera de esos símbolos e ignora los vacíos
+            .Select(m => m.Trim()) // Por si acaso queda algún espacio fantasma
+            .Distinct() // ¡Toque de Arquitecto! Si el estudiante pone "107, 107", lo procesamos una sola vez
             .ToList();
 
         // Segunda validación de seguridad
         if (!listaMaterias.Any())
-            return Results.BadRequest("El formato de los códigos proporcionados no es válido.");
+            return Results.BadRequest("El formato de los códigos proporcionados no es válido o está vacío.");
 
         // 3. Buscamos en BD ultrarrápido (Usando la nueva 'listaMaterias')
         var materiasBd = await db.PlanesDeCurso
