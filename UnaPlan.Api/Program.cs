@@ -330,23 +330,34 @@ app.MapDelete("/api/admin/limpiar-catalogo", async (CatalogoScraperService scrap
 
 // DTO para recibir los datos del estudiante
 
-
 app.MapPost("/api/estudiantes/solicitar-plan", async (
     [FromBody] SolicitudPlanDto solicitud,
     AppDbContext db,
     ExcelGeneratorService excelService,
     EmailService emailService) =>
 {
-    if (solicitud.CodigosMaterias == null || !solicitud.CodigosMaterias.Any())
+    // 1. Validación inicial: ¿Viene texto nulo o completamente vacío?
+    if (string.IsNullOrWhiteSpace(solicitud.CodigosMaterias))
         return Results.BadRequest("Debes proporcionar al menos un código de materia.");
 
     try
     {
-        // 1. Buscamos en BD ultrarrápido (Incluyendo Materiales y Evaluaciones)
+        // 2. LA MAGIA: Convertimos el texto crudo ("107, 300") en una lista de C# limpia
+        List<string> listaMaterias = solicitud.CodigosMaterias
+            .Split(',') // Picamos por la coma
+            .Select(m => m.Trim()) // Quitamos espacios a los lados (ej: " 300 " -> "300")
+            .Where(m => !string.IsNullOrWhiteSpace(m)) // Ignoramos pedazos vacíos si hay comas extra
+            .ToList();
+
+        // Segunda validación de seguridad
+        if (!listaMaterias.Any())
+            return Results.BadRequest("El formato de los códigos proporcionados no es válido.");
+
+        // 3. Buscamos en BD ultrarrápido (Usando la nueva 'listaMaterias')
         var materiasBd = await db.PlanesDeCurso
             .Include(p => p.MaterialesDeApoyo)
-            .Include(p => p.Evaluaciones) // Usa tu clase MateriaEvaluacion existente
-            .Where(p => solicitud.CodigosMaterias.Contains(p.CodigoMateria))
+            .Include(p => p.Evaluaciones) 
+            .Where(p => listaMaterias.Contains(p.CodigoMateria)) // <-- Aquí usamos la lista limpia
             .ToListAsync();
 
         if (!materiasBd.Any())
@@ -354,7 +365,7 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 
         var listaParaExcel = new List<ExcelGeneratorService.MateriaPlanillaDto>();
 
-        // 2. Mapeamos directamente desde la Base de Datos
+        // 4. Mapeamos directamente desde la Base de Datos
         foreach (var materia in materiasBd)
         {
             if (materia.Evaluaciones != null && materia.Evaluaciones.Any())
@@ -366,8 +377,7 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
                         Codigo = materia.CodigoMateria,
                         Nombre = eval.NombreMateria,
                         TipoEvaluacion = eval.Tipo,
-                        // AQUÍ LA CORRECCIÓN: Convertimos el DateTime a string para el Excel
-                        FechaEntrega = eval.FechaEntrega.ToString("dd/MM/yyyy"),
+                        FechaEntrega = eval.FechaEntrega.ToString("dd/MM/yyyy"), // Formato limpio
                         UrlPlan = materia.UrlDocumento,
                         UrlsMateriales = materia.MaterialesDeApoyo.Select(m => m.UrlDrive).ToList()
                     });
@@ -388,10 +398,10 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
             }
         }
 
-        // 3. Generamos Excel en Memoria
+        // 5. Generamos Excel en Memoria
         var archivoExcelBytes = excelService.GenerarPlanDeEvaluacionExcel(listaParaExcel);
 
-        // 4. Enviamos Correo
+        // 6. Enviamos Correo
         await emailService.EnviarPlanPersonalizadoAsync(
             solicitud.CorreoElectronico,
             solicitud.NombreCompleto,
@@ -401,13 +411,13 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
     }
     catch (Exception ex)
     {
+        // En producción, podrías querer guardar este error en un log (ej: Serilog)
         return Results.Problem($"Ocurrió un error al procesar tu plan: {ex.Message}");
     }
 })
 .WithTags("7. Servicios para Estudiantes")
 .WithSummary("Generar y enviar Plan de Evaluación en Excel")
 .WithDescription("Recibe las materias inscritas por el estudiante, genera un archivo Excel en memoria y se lo envía automáticamente por correo electrónico.");
-
 
 // ---> ENDPOINT MÁGICO PARA ENGAÑAR A EXCEL Y ABRIR GOOGLE DRIVE
 app.MapGet("/api/go", (string target) =>
@@ -456,5 +466,5 @@ public class SolicitudPlanDto
 {
     public string NombreCompleto { get; set; } = "";
     public string CorreoElectronico { get; set; } = "";
-    public List<string> CodigosMaterias { get; set; } = new();
+    public string CodigosMaterias { get; set; } = "";
 }
