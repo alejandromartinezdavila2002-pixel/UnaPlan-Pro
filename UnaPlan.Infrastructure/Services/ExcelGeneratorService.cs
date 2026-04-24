@@ -26,22 +26,14 @@ public class ExcelGeneratorService
         // --- 1. ENCABEZADO (MÁS ALTO) ---
         var filaTitulo = worksheet.Row(1);
         filaTitulo.Height = 40; // Le damos altura premium
-<<<<<<< HEAD
 
-=======
-        
->>>>>>> b522a322271e3a3bf0a4e024cdccc9689b3386b4
         worksheet.Cell("A1").Value = "PLAN DE EVALUACIÓN PERSONALIZADO - UNA";
         var titulo = worksheet.Range("A1:D1");
         titulo.Merge().Style
             .Font.SetBold()
             .Font.SetFontSize(18)
             .Font.SetFontColor(XLColor.White)
-<<<<<<< HEAD
             .Fill.SetBackgroundColor(XLColor.FromHtml("#1e293b"))
-=======
-            .Fill.SetBackgroundColor(XLColor.FromHtml("#1e293b")) 
->>>>>>> b522a322271e3a3bf0a4e024cdccc9689b3386b4
             .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center);
 
         // --- 2. CABECERAS (CON AIRE) ---
@@ -74,19 +66,11 @@ public class ExcelGeneratorService
                 worksheet.Cell(filaActual, 4).Value = eval.FechaEntrega;
                 worksheet.Cell(filaActual, 4).Style.Font.SetBold().Font.SetFontColor(XLColor.DarkRed)
                     .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center);
-<<<<<<< HEAD
 
                 // Bordes internos suaves
                 worksheet.Range(filaActual, 3, filaActual, 4).Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
                 worksheet.Range(filaActual, 3, filaActual, 4).Style.Border.OutsideBorderColor = XLColor.FromHtml("#e2e8f0");
 
-=======
-                
-                // Bordes internos suaves
-                worksheet.Range(filaActual, 3, filaActual, 4).Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
-                worksheet.Range(filaActual, 3, filaActual, 4).Style.Border.OutsideBorderColor = XLColor.FromHtml("#e2e8f0");
-                
->>>>>>> b522a322271e3a3bf0a4e024cdccc9689b3386b4
                 filaActual++;
             }
 
@@ -108,34 +92,20 @@ public class ExcelGeneratorService
             var rangoMateriaCompleta = worksheet.Range(filaInicioMateria, 1, filaActual - 1, 4);
             rangoMateriaCompleta.Style.Border.OutsideBorder = XLBorderStyleValues.Medium;
             rangoMateriaCompleta.Style.Border.OutsideBorderColor = XLColor.FromHtml("#94a3b8");
-<<<<<<< HEAD
 
             filaActual++; // Dejamos una fila pequeña de separación entre materias
             worksheet.Row(filaActual - 1).Height = 8;
-=======
-            
-            filaActual++; // Dejamos una fila pequeña de separación entre materias
-            worksheet.Row(filaActual-1).Height = 8; 
->>>>>>> b522a322271e3a3bf0a4e024cdccc9689b3386b4
         }
 
         // --- 4. RECURSOS (LINKS) CON MUCHO AIRE ---
         filaActual += 3; // Espacio generoso antes de los links
-<<<<<<< HEAD
 
-=======
-        
->>>>>>> b522a322271e3a3bf0a4e024cdccc9689b3386b4
         worksheet.Row(filaActual).Height = 30;
         worksheet.Cell(filaActual, 1).Value = "RECURSOS Y ENLACES OFICIALES";
         worksheet.Range(filaActual, 1, filaActual, 4).Merge().Style
             .Font.SetBold()
             .Font.SetFontSize(13)
-<<<<<<< HEAD
             .Fill.SetBackgroundColor(XLColor.FromHtml("#eff6ff"))
-=======
-            .Fill.SetBackgroundColor(XLColor.FromHtml("#eff6ff")) 
->>>>>>> b522a322271e3a3bf0a4e024cdccc9689b3386b4
             .Font.SetFontColor(XLColor.FromHtml("#1d4ed8"))
             .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center);
 
@@ -165,11 +135,7 @@ public class ExcelGeneratorService
                 linkMat.SetHyperlink(new XLHyperlink(urlMagicaMat));
                 linkMat.Style.Font.SetFontColor(XLColor.Blue).Font.SetUnderline();
             }
-<<<<<<< HEAD
 
-=======
-            
->>>>>>> b522a322271e3a3bf0a4e024cdccc9689b3386b4
             filaActual++;
             worksheet.Row(filaActual).Height = 5; // Separador sutil
             filaActual++;
