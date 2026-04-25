@@ -25,7 +25,7 @@ public class ExcelGeneratorService
         worksheet.Style.Alignment.SetVertical(XLAlignmentVerticalValues.Center);
 
         // --- 2. ENCABEZADO MAESTRO (FILA 1) ---
-        worksheet.Row(1).Height = 45; 
+        worksheet.Row(1).Height = 45;
         worksheet.Cell("A1").Value = "PLAN DE EVALUACIÓN PERSONALIZADO - UNA";
         var tituloMaestro = worksheet.Range("A1:H1");
         tituloMaestro.Merge().Style
@@ -60,9 +60,9 @@ public class ExcelGeneratorService
 
 
         // --- 4. CABECERAS DE COLUMNAS SIMÉTRICAS (FILA 4) ---
-        worksheet.Row(3).Height = 10; 
+        worksheet.Row(3).Height = 10;
         int filaInicioDatos = 5;
-        
+
         // Cabeceras Tabla Principal (Izquierda)
         string[] headersIzq = { "CÓDIGO", "MATERIA", "EVALUACIÓN", "FECHA DE ENTREGA" };
         for (int i = 0; i < headersIzq.Length; i++)
@@ -100,12 +100,12 @@ public class ExcelGeneratorService
 
             foreach (var eval in grupo)
             {
-                worksheet.Row(filaActual).Height = 22; 
+                worksheet.Row(filaActual).Height = 22;
                 worksheet.Cell(filaActual, 3).Value = eval.TipoEvaluacion;
                 worksheet.Cell(filaActual, 4).Value = eval.FechaEntrega;
                 worksheet.Cell(filaActual, 4).Style.Font.SetBold().Font.SetFontColor(XLColor.DarkRed)
                     .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center);
-                
+
                 worksheet.Range(filaActual, 3, filaActual, 4).Style.Border.OutsideBorder = XLBorderStyleValues.Thin;
                 worksheet.Range(filaActual, 3, filaActual, 4).Style.Border.OutsideBorderColor = XLColor.FromHtml("#e2e8f0");
                 filaActual++;
@@ -124,14 +124,14 @@ public class ExcelGeneratorService
             rangoMateriaCompleta.Style.Border.OutsideBorder = XLBorderStyleValues.Medium;
             rangoMateriaCompleta.Style.Border.OutsideBorderColor = XLColor.FromHtml("#94a3b8");
 
-            filaActual++; 
+            filaActual++;
             worksheet.Row(filaActual - 1).Height = 8;
         }
 
 
         // --- 6. CONSTRUIR TABLA RECURSOS (DERECHA) ---
         int filaRecursos = filaInicioDatos;
-        
+
         foreach (var mat in materias.DistinctBy(m => m.Codigo))
         {
             worksheet.Row(filaRecursos).Height = 22;
@@ -165,16 +165,16 @@ public class ExcelGeneratorService
         var panelRecursos = worksheet.Range(4, 6, ultimaFilaGlobal, 8);
         panelRecursos.Style.Border.OutsideBorder = XLBorderStyleValues.Medium;
         panelRecursos.Style.Border.OutsideBorderColor = XLColor.FromHtml("#cbd5e1");
-        panelRecursos.Style.Fill.SetBackgroundColor(XLColor.FromHtml("#f8fafc")); 
+        panelRecursos.Style.Fill.SetBackgroundColor(XLColor.FromHtml("#f8fafc"));
 
-        if(filaRecursos > filaInicioDatos)
+        if (filaRecursos > filaInicioDatos)
         {
             worksheet.Range(filaInicioDatos, 6, filaRecursos - 1, 8).Style.Border.InsideBorder = XLBorderStyleValues.Thin;
             worksheet.Range(filaInicioDatos, 6, filaRecursos - 1, 8).Style.Border.InsideBorderColor = XLColor.FromHtml("#e2e8f0");
         }
 
         // --- ¡LA SOLUCIÓN PARA GOOGLE SHEETS! Anchos explícitos ---
-        
+
         // Tabla Izquierda
         worksheet.Column(1).Width = 12; // CÓDIGO
         worksheet.Column(2).Width = 45; // MATERIA (Súper ancha para nombres largos)
@@ -182,7 +182,7 @@ public class ExcelGeneratorService
         worksheet.Column(4).Width = 22; // FECHA DE ENTREGA
 
         // Columna separadora E
-        worksheet.Column(5).Width = 4; 
+        worksheet.Column(5).Width = 4;
 
         // Tabla Derecha
         worksheet.Column(6).Width = 16; // MATERIA 

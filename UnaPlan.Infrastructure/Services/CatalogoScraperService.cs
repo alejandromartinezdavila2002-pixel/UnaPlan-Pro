@@ -20,6 +20,7 @@ public class CatalogoScraperService
     {
         _db = db;
     }
+
     // ========================================================================
     // 1. FUENTES DE DATOS ESTÁTICAS PARA PLANES DE CURSO
     // ========================================================================
@@ -59,6 +60,7 @@ public class CatalogoScraperService
         { "610 Contaduría Pública", "1hiuet-prrvRsAjia9ytmAfQRcJO7Sazd" },
         { "612 Administración de Empresas", "1Z5Pvl081TbxTltnFvqoqvPjCmuNi7H-e" },
         { "613 Administración de Empresas Riesgos y Seguros", "1E8GVE_zllVSnitxBT1kk7uRgcjZnkMZB" }
+        
     };
 
     // ========================================================================
