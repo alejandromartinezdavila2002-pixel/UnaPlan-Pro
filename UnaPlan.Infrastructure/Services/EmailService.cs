@@ -50,9 +50,9 @@ public class EmailService
 
                 <p>Este archivo contiene:</p>
                 <ul>
-                    <li>Las fechas de entrega extraídas directamente de los Planes de Curso Oficiales.</li>
-                    <li>Enlaces directos a los PDFs de cada materia.</li>
-                    <li>Enlaces a los materiales de apoyo disponibles.</li>
+                      <li>Las fechas de entrega extraídas directamente de los Calendario de evaluaciones UNA.</li>
+                      <li>Enlaces directos a los PDFs de cada Plan de curso.</li>
+                      <li>Enlaces a los materiales de apoyo disponibles.</li>
                 </ul>
                 <p>¡Mucho éxito en este semestre!</p>
                 <br/>
