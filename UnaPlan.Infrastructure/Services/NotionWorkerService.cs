@@ -110,10 +110,11 @@ public class NotionWorkerService : BackgroundService
                         .ToList();
 
                     var materiasBd = await db.PlanesDeCurso
-                        .Include(p => p.MaterialesDeApoyo)
-                        .Include(p => p.Evaluaciones)
-                        .Where(p => listaMaterias.Contains(p.CodigoMateria))
-                        .ToListAsync();
+                     .Include(p => p.MaterialesDeApoyo)
+                     .Include(p => p.Evaluaciones)
+                     .Where(p => listaMaterias.Contains(p.CodigoMateria))
+                     .AsSplitQuery() 
+                     .ToListAsync();
 
                     var codigosEncontrados = materiasBd.Select(m => m.CodigoMateria).ToList();
                     List<string> materiasNoEncontradas = listaMaterias.Except(codigosEncontrados).ToList();
