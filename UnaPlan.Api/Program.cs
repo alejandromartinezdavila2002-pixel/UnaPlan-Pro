@@ -53,6 +53,9 @@ builder.Services.AddScoped<EmailService>();
 // Registra el trabajador en segundo plano
 builder.Services.AddHostedService<SupabaseKeepAliveService>();
 
+// Registra el NotionWorkerService para que se ejecute continuamente en segundo plano
+builder.Services.AddHostedService<NotionWorkerService>();
+
 
 // ¡AQUÍ SE CONSTRUYE LA APP! (Ya no se pueden agregar más servicios al builder)
 var app = builder.Build();
