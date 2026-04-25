@@ -21,7 +21,7 @@ public class ExcelGeneratorService
         var worksheet = workbook.Worksheets.Add("Mi Plan UNA");
 
         // --- 1. CONFIGURACIÓN DE VISTA (ZOOM) ---
-        worksheet.SheetView.ZoomScale = 125;
+        worksheet.SheetView.ZoomScale = 135;
         worksheet.Style.Alignment.SetVertical(XLAlignmentVerticalValues.Center);
 
         // --- 2. ENCABEZADO MAESTRO (FILA 1) ---
@@ -60,7 +60,7 @@ public class ExcelGeneratorService
 
 
         // --- 4. CABECERAS DE COLUMNAS SIMÉTRICAS (FILA 4) ---
-        worksheet.Row(3).Height = 10; // Respiro visual
+        worksheet.Row(3).Height = 10; 
         int filaInicioDatos = 5;
         
         // Cabeceras Tabla Principal (Izquierda)
@@ -76,7 +76,7 @@ public class ExcelGeneratorService
                 .Border.OutsideBorder = XLBorderStyleValues.Thin;
         }
 
-        // Cabeceras Tabla Recursos (Derecha) - ¡NUEVO!
+        // Cabeceras Tabla Recursos (Derecha)
         string[] headersDer = { "MATERIA", "DOC. OFICIAL", "MATERIAL EXTRA" };
         for (int i = 0; i < headersDer.Length; i++)
         {
@@ -162,26 +162,32 @@ public class ExcelGeneratorService
         // --- 7. AJUSTES FINALES Y SIMETRÍA ---
         int ultimaFilaGlobal = Math.Max(filaActual - 1, filaRecursos - 1);
 
-        // Panel de recursos con fondo sutil (¡AHORA EMPIEZA EN LA FILA 4 PARA IGUALAR A LA OTRA!)
         var panelRecursos = worksheet.Range(4, 6, ultimaFilaGlobal, 8);
         panelRecursos.Style.Border.OutsideBorder = XLBorderStyleValues.Medium;
         panelRecursos.Style.Border.OutsideBorderColor = XLColor.FromHtml("#cbd5e1");
         panelRecursos.Style.Fill.SetBackgroundColor(XLColor.FromHtml("#f8fafc")); 
 
-        // Bordes internos sutiles para la zona de datos de los recursos
         if(filaRecursos > filaInicioDatos)
         {
             worksheet.Range(filaInicioDatos, 6, filaRecursos - 1, 8).Style.Border.InsideBorder = XLBorderStyleValues.Thin;
             worksheet.Range(filaInicioDatos, 6, filaRecursos - 1, 8).Style.Border.InsideBorderColor = XLColor.FromHtml("#e2e8f0");
         }
 
+        // --- ¡LA SOLUCIÓN PARA GOOGLE SHEETS! Anchos explícitos ---
+        
+        // Tabla Izquierda
+        worksheet.Column(1).Width = 12; // CÓDIGO
+        worksheet.Column(2).Width = 45; // MATERIA (Súper ancha para nombres largos)
+        worksheet.Column(3).Width = 16; // EVALUACIÓN
+        worksheet.Column(4).Width = 22; // FECHA DE ENTREGA
+
         // Columna separadora E
         worksheet.Column(5).Width = 4; 
 
-        // Auto-ajuste de columnas
-        worksheet.Columns(1, 4).AdjustToContents();
-        worksheet.Columns(6, 8).AdjustToContents();
-        foreach (var col in worksheet.Columns(1, 8)) col.Width += 4;
+        // Tabla Derecha
+        worksheet.Column(6).Width = 16; // MATERIA 
+        worksheet.Column(7).Width = 22; // DOC. OFICIAL
+        worksheet.Column(8).Width = 24; // MATERIAL EXTRA
 
         using var stream = new MemoryStream();
         workbook.SaveAs(stream);
