@@ -21,8 +21,7 @@ public class ExcelGeneratorService
         var worksheet = workbook.Worksheets.Add("Mi Plan UNA");
 
         // --- 1. CONFIGURACIÓN DE VISTA (ZOOM) ---
-        // Establecemos el zoom al 125% para que las tablas se vean grandes y claras al abrir
-        worksheet.SheetView.ZoomScale = 130;
+        worksheet.SheetView.ZoomScale = 125;
         worksheet.Style.Alignment.SetVertical(XLAlignmentVerticalValues.Center);
 
         // --- 2. ENCABEZADO MAESTRO (FILA 1) ---
@@ -60,23 +59,36 @@ public class ExcelGeneratorService
             .Border.OutsideBorder = XLBorderStyleValues.Medium;
 
 
-        // --- 4. CABECERAS DE COLUMNAS (FILA 4) ---
-        // Dejamos la fila 3 vacía como respiro visual
-        worksheet.Row(3).Height = 10;
+        // --- 4. CABECERAS DE COLUMNAS SIMÉTRICAS (FILA 4) ---
+        worksheet.Row(3).Height = 10; // Respiro visual
         int filaInicioDatos = 5;
         
-        // Cabeceras Tabla Principal
-        string[] headers = { "CÓDIGO", "MATERIA", "EVALUACIÓN", "FECHA DE ENTREGA" };
-        for (int i = 0; i < headers.Length; i++)
+        // Cabeceras Tabla Principal (Izquierda)
+        string[] headersIzq = { "CÓDIGO", "MATERIA", "EVALUACIÓN", "FECHA DE ENTREGA" };
+        for (int i = 0; i < headersIzq.Length; i++)
         {
             var cell = worksheet.Cell(4, i + 1);
-            cell.Value = headers[i];
+            cell.Value = headersIzq[i];
             cell.Style.Font.SetBold()
                 .Fill.SetBackgroundColor(XLColor.FromHtml("#f1f5f9"))
                 .Font.SetFontColor(XLColor.FromHtml("#475569"))
                 .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center)
                 .Border.OutsideBorder = XLBorderStyleValues.Thin;
         }
+
+        // Cabeceras Tabla Recursos (Derecha) - ¡NUEVO!
+        string[] headersDer = { "MATERIA", "DOC. OFICIAL", "MATERIAL EXTRA" };
+        for (int i = 0; i < headersDer.Length; i++)
+        {
+            var cell = worksheet.Cell(4, i + 6);
+            cell.Value = headersDer[i];
+            cell.Style.Font.SetBold()
+                .Fill.SetBackgroundColor(XLColor.FromHtml("#f1f5f9"))
+                .Font.SetFontColor(XLColor.FromHtml("#475569"))
+                .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center)
+                .Border.OutsideBorder = XLBorderStyleValues.Thin;
+        }
+
 
         // --- 5. CONSTRUIR TABLA PRINCIPAL (IZQUIERDA) ---
         int filaActual = filaInicioDatos;
@@ -116,6 +128,7 @@ public class ExcelGeneratorService
             worksheet.Row(filaActual - 1).Height = 8;
         }
 
+
         // --- 6. CONSTRUIR TABLA RECURSOS (DERECHA) ---
         int filaRecursos = filaInicioDatos;
         
@@ -145,14 +158,22 @@ public class ExcelGeneratorService
             filaRecursos++;
         }
 
+
         // --- 7. AJUSTES FINALES Y SIMETRÍA ---
         int ultimaFilaGlobal = Math.Max(filaActual - 1, filaRecursos - 1);
 
-        // Panel de recursos con fondo sutil
-        var panelRecursos = worksheet.Range(filaInicioDatos, 6, ultimaFilaGlobal, 8);
+        // Panel de recursos con fondo sutil (¡AHORA EMPIEZA EN LA FILA 4 PARA IGUALAR A LA OTRA!)
+        var panelRecursos = worksheet.Range(4, 6, ultimaFilaGlobal, 8);
         panelRecursos.Style.Border.OutsideBorder = XLBorderStyleValues.Medium;
         panelRecursos.Style.Border.OutsideBorderColor = XLColor.FromHtml("#cbd5e1");
         panelRecursos.Style.Fill.SetBackgroundColor(XLColor.FromHtml("#f8fafc")); 
+
+        // Bordes internos sutiles para la zona de datos de los recursos
+        if(filaRecursos > filaInicioDatos)
+        {
+            worksheet.Range(filaInicioDatos, 6, filaRecursos - 1, 8).Style.Border.InsideBorder = XLBorderStyleValues.Thin;
+            worksheet.Range(filaInicioDatos, 6, filaRecursos - 1, 8).Style.Border.InsideBorderColor = XLColor.FromHtml("#e2e8f0");
+        }
 
         // Columna separadora E
         worksheet.Column(5).Width = 4; 
