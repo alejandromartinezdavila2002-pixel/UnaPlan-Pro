@@ -1,4 +1,4 @@
-﻿using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -67,7 +67,7 @@ public class NotionWorkerService : BackgroundService
         // 1. Preguntamos a Notion: "¿Hay alguien con Estado = Pendiente?"
         var queryParams = new DatabasesQueryParameters
         {
-            Filter = new SelectFilter("Estado", equal: "Pendiente")
+            Filter = new StatusFilter("Estado", equal: "Pendiente")
         };
 
         var paginatedList = await _notionClient.Databases.QueryAsync(_databaseId, queryParams);
@@ -77,7 +77,7 @@ public class NotionWorkerService : BackgroundService
 
         _logger.LogInformation($"📥 Se encontraron {paginatedList.Results.Count} solicitudes nuevas.");
 
-        // 2. Creamos un Scope (Un espacio de trabajo temporal para inyectar tus servicios)
+        // 2. Creamos un Scope (Un espacio de trabajo temporal para inyectar servicios)
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
         var excelService = scope.ServiceProvider.GetRequiredService<ExcelGeneratorService>();
@@ -100,7 +100,7 @@ public class NotionWorkerService : BackgroundService
 
                     _logger.LogInformation($"Procesando a: {nombre} ({correo}) - Materias: {codigosMaterias}");
 
-                    // --- TU LÓGICA DE PROGRAM.CS VIENE AQUÍ ---
+                    // ---LÓGICA DE PROGRAM.CS VIENE AQUÍ ---
                     char[] separadores = { ',', '.', ' ', '-', ';' };
                     List<string> listaMaterias = codigosMaterias
                         .Split(separadores, StringSplitOptions.RemoveEmptyEntries)
@@ -157,7 +157,7 @@ public class NotionWorkerService : BackgroundService
                     // --- CIERRE DEL CICLO: Actualizamos el Estado en Notion a "Enviado" ---
                     var updateProps = new Dictionary<string, PropertyValue>
                     {
-                        { "Estado", new SelectPropertyValue { Select = new SelectOption { Name = "Enviado" } } }
+                        { "Estado", new StatusPropertyValue { Status = new StatusOption { Name = "Enviado" } } }
                     };
 
                     await _notionClient.Pages.UpdatePropertiesAsync(page.Id, updateProps);
