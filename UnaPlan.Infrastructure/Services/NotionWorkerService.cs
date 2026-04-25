@@ -65,9 +65,10 @@ public class NotionWorkerService : BackgroundService
     private async Task ProcesarSolicitudesPendientesAsync()
     {
         // 1. Preguntamos a Notion: "¿Hay alguien con Estado = Pendiente?"
+        // Buscamos todas las filas donde la columna "Estado" esté VACÍA
         var queryParams = new DatabasesQueryParameters
         {
-            Filter = new StatusFilter("Estado", equal: "Pendiente")
+            Filter = new SelectFilter("Estado", isEmpty: true)
         };
 
         var paginatedList = await _notionClient.Databases.QueryAsync(_databaseId, queryParams);
@@ -157,7 +158,7 @@ public class NotionWorkerService : BackgroundService
                     // --- CIERRE DEL CICLO: Actualizamos el Estado en Notion a "Enviado" ---
                     var updateProps = new Dictionary<string, PropertyValue>
                     {
-                        { "Estado", new StatusPropertyValue { Status = new StatusOption { Name = "Enviado" } } }
+                        { "Estado", new SelectPropertyValue { Select = new SelectOption { Name = "Enviado" } } }
                     };
 
                     await _notionClient.Pages.UpdatePropertiesAsync(page.Id, updateProps);
