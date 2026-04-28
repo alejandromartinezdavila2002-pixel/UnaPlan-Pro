@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.OpenApi.Models;
+using System.Net.NetworkInformation;
 using UnaPlan.Core.Entities;
 using UnaPlan.Infrastructure.Data;
 using UnaPlan.Infrastructure.Services;
@@ -55,6 +56,9 @@ builder.Services.AddHostedService<SupabaseKeepAliveService>();
 
 // Registra el NotionWorkerService para que se ejecute continuamente en segundo plano
 builder.Services.AddHostedService<NotionWorkerService>();
+
+// Registramos el NotionPublisherService para que pueda ser inyectado en el Worker y publicar en Notion
+builder.Services.AddScoped<NotionPublisherService>();
 
 
 // ¡AQUÍ SE CONSTRUYE LA APP! (Ya no se pueden agregar más servicios al builder)
@@ -450,8 +454,20 @@ app.MapGet("/api/go", (string target) =>
 })
 .ExcludeFromDescription(); // Esto hace que no se muestre en Swagger para mantenerlo limpio
 
+
+
+// Endpoint para despertar la API (útil para Render y para monitoreo)
 app.MapGet("/api/ping", () => Results.Ok(new { mensaje = "API Despierta y lista" }))
    .ExcludeFromDescription();
+
+
+// Endpoint para sincronizar la cartelera de Notion (puede ser llamado por el Worker o manualmente)
+app.MapPost("/api/notion/sync-cartelera", async (NotionPublisherService publisherService) =>
+{
+    await publisherService.SincronizarCarteleraAsync();
+    return Results.Ok(new { mensaje = "Cartelera sincronizada correctamente con Notion." });
+})
+.ExcludeFromDescription();
 
 app.Run();
 
