@@ -60,7 +60,7 @@ public class NotionPublisherService
                 var materiaNombre = eval.NombreMateria ?? "Materia sin nombre";
 
                 // Extraemos el código de forma segura (los primeros 3 caracteres si existen)
-                var codigoMateria = materiaNombre.Length >= 3 ? materiaNombre.Substring(0, 3) : "N/A";
+                var codigoMateria = eval.CodigoMateria ?? "N/A";
 
                 // Propiedades de las columnas de la tabla principal
                 var properties = new Dictionary<string, PropertyValue>
@@ -68,8 +68,8 @@ public class NotionPublisherService
                     { "Materia", new TitlePropertyValue { Title = new List<RichTextBase> { new RichTextText { Text = new Text { Content = materiaNombre } } } } },
                     { "Código", new RichTextPropertyValue { RichText = new List<RichTextBase> { new RichTextText { Text = new Text { Content = codigoMateria } } } } },
                     { "Tipo", new SelectPropertyValue { Select = new SelectOption { Name = tipoEvaluacion } } },
-                    { "Fecha de Entrega", new DatePropertyValue { Date = new Date { Start = eval.FechaEntrega } } },
-                    { "Semana", new NumberPropertyValue { Number = 1 } } // Ajusta esto si tienes la lógica de semanas
+                    { "Fecha de Entrega", new DatePropertyValue { Date = new Date { Start = eval.FechaEntrega.Date } } },
+                    { "Semana", new NumberPropertyValue { Number = eval.Semana } }
                 };
 
                 // Contenido interno de la página (El texto que pediste al final, usando negritas en vez de Heading para evitar errores)
