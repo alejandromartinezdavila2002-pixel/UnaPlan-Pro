@@ -58,6 +58,9 @@ builder.Services.AddHostedService<SupabaseKeepAliveService>();
 builder.Services.AddHostedService<NotionWorkerService>();
 
 
+
+builder.Services.AddHostedService<DriveMonitorWorkerService>();
+
 // Aquí es donde registramos el cliente de Notion, pero sin hardcodear el token
 // Registro del cliente de Notion usando IConfiguration para evitar Hardcoding
 builder.Services.AddSingleton<Notion.Client.INotionClient>(sp =>
