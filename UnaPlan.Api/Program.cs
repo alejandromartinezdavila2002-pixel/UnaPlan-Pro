@@ -475,13 +475,13 @@ app.MapGet("/api/ping", () => Results.Ok(new { mensaje = "API Despierta y lista"
    .ExcludeFromDescription();
 
 
-// Endpoint para sincronizar la cartelera de Notion (puede ser llamado por el Worker o manualmente)
-app.MapPost("/api/notion/sync-cartelera", async (NotionPublisherService publisherService) =>
-{
-    await publisherService.SincronizarCarteleraAsync();
-    return Results.Ok(new { mensaje = "Cartelera sincronizada correctamente con Notion." });
-})
-.ExcludeFromDescription();
+//// Endpoint para sincronizar la cartelera de Notion (puede ser llamado por el Worker o manualmente)
+//app.MapPost("/api/notion/sync-cartelera", async (NotionPublisherService publisherService) =>
+//{
+//    await publisherService.SincronizarCarteleraAsync();
+//    return Results.Ok(new { mensaje = "Cartelera sincronizada correctamente con Notion." });
+//})
+//.ExcludeFromDescription();
 
 app.Run();
 
