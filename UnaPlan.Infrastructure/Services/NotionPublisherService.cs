@@ -28,11 +28,9 @@ public class NotionPublisherService
 
     public async Task SincronizarCarteleraAsync()
     {
-        // Usamos un Scope para proteger la memoria RAM del servidor
         using var scope = _scopeFactory.CreateScope();
         var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
 
-        // Asegúrate de tener esta variable en Render y en tu appsettings.json
         var databaseId = _config["NotionSettings:CarteleraDatabaseId"];
 
         if (string.IsNullOrEmpty(databaseId))
@@ -43,36 +41,45 @@ public class NotionPublisherService
 
         try
         {
-            // 1. Traer las evaluaciones de los próximos 30 días desde la base de datos
-            var limiteFecha = DateTime.UtcNow.AddDays(30);
-            var evaluaciones = await db.PlanesDeCurso
-                .Include(p => p.Evaluaciones)
-                .SelectMany(p => p.Evaluaciones)
-                .Where(e => e.FechaEntrega >= DateTime.UtcNow && e.FechaEntrega <= limiteFecha)
+            // 1. Calcular exactamente la fecha del próximo sábado
+            DateTime hoy = DateTime.UtcNow.Date;
+            int diasHastaSabado = ((int)DayOfWeek.Saturday - (int)hoy.DayOfWeek + 7) % 7;
+
+            // Si hoy es sábado, asume hoy mismo. Si prefieres que busque el de la otra semana, cambiaríamos esto a 7.
+            if (diasHastaSabado == 0) diasHastaSabado = 7;
+
+            DateTime proximoSabado = hoy.AddDays(diasHastaSabado);
+
+            _logger.LogInformation($"Buscando evaluaciones exclusivamente para el próximo sábado: {proximoSabado:dd/MM/yyyy}");
+
+            // 2. Filtrar la base de datos priorizando FechaEntregaReal
+            var evaluaciones = await db.Evaluaciones
+                .Where(e =>
+                    (e.FechaEntregaReal.HasValue && e.FechaEntregaReal.Value.Date == proximoSabado) ||
+                    (!e.FechaEntregaReal.HasValue && e.FechaEntrega.Date == proximoSabado))
                 .ToListAsync();
 
-            _logger.LogInformation($"Se encontraron {evaluaciones.Count} evaluaciones próximas para publicar.");
+            _logger.LogInformation($"Se encontraron {evaluaciones.Count} evaluaciones para publicar.");
 
-            // 2. Escribir cada evaluación en la nueva Cartelera de Notion
+            // 3. Escribir cada evaluación en la Cartelera de Notion
             foreach (var eval in evaluaciones)
             {
                 var tipoEvaluacion = eval.Tipo ?? "Por definir";
                 var materiaNombre = eval.NombreMateria ?? "Materia sin nombre";
-
-                // Extraemos el código de forma segura (los primeros 3 caracteres si existen)
                 var codigoMateria = eval.CodigoMateria ?? "N/A";
 
-                // Propiedades de las columnas de la tabla principal
+                // Determinamos la fecha final a imprimir
+                var fechaAMostrar = eval.FechaEntregaReal ?? eval.FechaEntrega;
+
                 var properties = new Dictionary<string, PropertyValue>
                 {
                     { "Materia", new TitlePropertyValue { Title = new List<RichTextBase> { new RichTextText { Text = new Text { Content = materiaNombre } } } } },
                     { "Código", new RichTextPropertyValue { RichText = new List<RichTextBase> { new RichTextText { Text = new Text { Content = codigoMateria } } } } },
                     { "Tipo", new SelectPropertyValue { Select = new SelectOption { Name = tipoEvaluacion } } },
-                    { "Fecha de Entrega", new DatePropertyValue { Date = new Date { Start = eval.FechaEntrega.Date } } },
-                    { "Semana", new NumberPropertyValue { Number = eval.Semana } }
+                    { "Fecha de Entrega", new DatePropertyValue { Date = new Date { Start = fechaAMostrar } } },
+                    { "Semana", new NumberPropertyValue { Number = eval.Semana ?? 0 } }
                 };
 
-                // Contenido interno de la página (El texto que pediste al final, usando negritas en vez de Heading para evitar errores)
                 var pageContent = new List<IBlock>
                 {
                     new ParagraphBlock
@@ -84,7 +91,7 @@ public class NotionPublisherService
                                 new RichTextText
                                 {
                                     Text = new Text { Content = "Detalles de la Evaluación" },
-                                    Annotations = new Annotations { IsBold = true } // Título en negrita seguro
+                                    Annotations = new Annotations { IsBold = true }
                                 }
                             }
                         }
@@ -101,17 +108,15 @@ public class NotionPublisherService
                     }
                 };
 
-                // Crear la fila en Notion
                 await _notionClient.Pages.CreateAsync(new PagesCreateParameters
                 {
                     Parent = new DatabaseParentInput { DatabaseId = databaseId },
                     Properties = properties,
-                    Children = pageContent // Escribe dentro del cuerpo de la página
+                    Children = pageContent
                 });
 
-                _logger.LogInformation($"Publicado en cartelera: {materiaNombre} - {tipoEvaluacion}");
+                _logger.LogInformation($"Publicado: {materiaNombre} ({codigoMateria}) - {tipoEvaluacion} para el {fechaAMostrar:dd/MM/yyyy}");
 
-                // Freno de 0.4 segundos (Límite de velocidad estricto de Notion)
                 await Task.Delay(400);
             }
 
