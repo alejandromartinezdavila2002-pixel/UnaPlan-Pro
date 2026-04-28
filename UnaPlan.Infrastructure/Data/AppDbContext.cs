@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using UnaPlan.Core.Entities;
 
 namespace UnaPlan.Infrastructure.Data;
@@ -15,6 +15,11 @@ public class AppDbContext : DbContext
     // Agregamos nuestras dos nuevas tablas maestras
     public DbSet<PlanDeCurso> PlanesDeCurso { get; set; }
     public DbSet<MaterialApoyo> MaterialesDeApoyo { get; set; }
+
+
+    // NUEVAS TABLAS
+    public DbSet<TrabajosPublicados> TrabajosPublicados { get; set; }
+    public DbSet<EstudiantesSuscritos> EstudiantesSuscritos { get; set; }
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -37,5 +42,20 @@ public class AppDbContext : DbContext
             .HasForeignKey(m => m.CodigoMateria)
             // Si borramos la materia, se borran sus links de apoyo automáticamente
             .OnDelete(DeleteBehavior.Cascade);
+
+
+        // 1. Relación 1 a 1: MateriaEvaluacion <-> TrabajosPublicados
+        modelBuilder.Entity<MateriaEvaluacion>()
+            .HasOne(e => e.TrabajoPublicado)
+            .WithOne(t => t.Evaluacion)
+            .HasForeignKey<TrabajosPublicados>(t => t.MateriaEvaluacionId)
+            .OnDelete(DeleteBehavior.Cascade); // Si borras la evaluación de la DB, se borra también su link de Drive
+
+        // 2. Configurar el Array de PostgreSQL explícitamente para evitar advertencias
+        modelBuilder.Entity<EstudiantesSuscritos>()
+            .Property(e => e.MateriasInscritas)
+            .HasColumnType("text[]");
+
+
     }
 }
