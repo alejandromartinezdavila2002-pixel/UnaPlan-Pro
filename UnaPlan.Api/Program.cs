@@ -65,7 +65,7 @@ builder.Services.AddSingleton<Notion.Client.INotionClient>(sp =>
     var config = sp.GetRequiredService<IConfiguration>();
 
     // El código busca la variable, pero no conoce su valor real aquí
-    var token = config["NotionSettings:NotionToken"];
+    var token = config["NotionSettings:Token"];
 
     if (string.IsNullOrEmpty(token))
     {
