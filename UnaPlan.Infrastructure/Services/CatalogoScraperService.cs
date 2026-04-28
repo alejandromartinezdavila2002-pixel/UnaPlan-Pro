@@ -5,6 +5,7 @@ using System.Text.RegularExpressions;
 using UnaPlan.Core.Entities;
 using UnaPlan.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+using System.IO; // <--- AGREGAR ESTO PARA EL MEMORYSTREAM
 
 namespace UnaPlan.Infrastructure.Services;
 
@@ -14,12 +15,45 @@ public class CatalogoScraperService
 
     // 1. Declaramos la variable de la base de datos
     private readonly AppDbContext _db;
+    private readonly EmailService _emailService; // NUEVO
 
     // 2. El Constructor: Aquí es donde la API le "inyecta" la conexión al servicio
-    public CatalogoScraperService(AppDbContext db)
+    public CatalogoScraperService(AppDbContext db, EmailService emailService)
     {
         _db = db;
+        _emailService = emailService;
     }
+
+
+    // =======================================================================
+    // DICCIONARIOS DE GOOGLE DRIVE (Rastreo de TP y TSP)
+    // Clave: Primer dígito del código de la materia (Ej: "1" para 100-199)
+    // Valor: ID de la carpeta de Google Drive
+    // =======================================================================
+    public static readonly Dictionary<string, string> CarpetasTsp = new()
+    {
+        { "0", "1zSmylBd2L3lXW-8Ttgrw8p56Q4xaR6IX" }, // 000-099
+        { "1", "12uQaNBdEtls5GTD7yHDSkz6syxDiAqvg" }, // 100-199
+        { "2", "1zRYk1nOtQ9HHbNarwxWWtLpqEJmfxe2e" }, // 200-299
+        { "3", "1sTmISd4l9dp82Hwvifi2wV1DoI9cU3fT" }, // 300-399
+        { "4", "1zAuserktjbES2MlWcDaTz1bGrBHXozJD" }, // 400-499
+        { "5", "13d7kkEUQUoI1br4JAj58VucXpOVgoRV8" }, // 500-599
+        { "6", "1ClH7wrhffrcd0M5EDU4JNj5jDDg0lyBA" }, // 600-699
+        { "7", "1vo6hFbJr7Hafqs5BSwJoq-rAoX0HbuU1" }  // 700-799
+    };
+
+    public static readonly Dictionary<string, string> CarpetasTp = new()
+    {
+        { "1", "1PEQRe2W8SqkknAmBZbPUgxRnxAyxf2_W" }, // 100-199
+        { "2", "108shUWVobZJ_7P1ejEW5k6f7kTiseZYO" }, // 200-299
+        { "3", "1PLReKygdtO_XaTr0EgDsdvldU2mdmtbp" }, // 300-399
+        // Nota: No hay carpeta 400 en los TP según los datos proporcionados
+        { "5", "1Gs4m09mM4TNSL5iwry07lYwUSGQsnSYm" }, // 500-599
+        { "6", "13Tt2gsSEgR8KwJZVwe1cM8-I9sU_Mp0w" }, // 600-699
+        { "7", "1JhSL5a7eNAfVRnUzymZfwTZrG-RrjAgg" }, // 700-799
+        { "8", "1-dSgGX50AXLgZvAdaOH_2FHStdiX6ZaL" }  // 800-899
+    };
+
 
     // ========================================================================
     // 1. FUENTES DE DATOS ESTÁTICAS PARA PLANES DE CURSO
@@ -288,6 +322,212 @@ public class CatalogoScraperService
         // 2. Borramos todos los planes de curso (padres)
         await _db.PlanesDeCurso.ExecuteDeleteAsync();
     }
+
+
+
+
+    // ========================================================================
+    // 6A. MOTOR DE ESCANEO TÁCTICO (TSPs - Por Fecha Específica)
+    // ========================================================================
+    public async Task EscanearTspAsync(DateTime fechaObjetivo)
+    {
+        var driveService = GetDriveService();
+
+        // Solo buscamos TSPs que se entregan "hoy"
+        var tspHoy = await _db.Evaluaciones
+            .Where(e => e.Tipo.Contains("TSP") && e.FechaEntrega.Date == fechaObjetivo.Date)
+            .ToListAsync();
+
+        if (!tspHoy.Any()) return;
+
+        foreach (var eval in tspHoy)
+        {
+            if (string.IsNullOrEmpty(eval.CodigoMateria)) continue;
+
+            string prefijo = eval.CodigoMateria.Substring(0, 1);
+            if (!CarpetasTsp.ContainsKey(prefijo)) continue;
+
+            string idCarpeta = CarpetasTsp[prefijo];
+
+            var request = driveService.Files.List();
+            request.Q = $"'{idCarpeta}' in parents and name contains '{eval.CodigoMateria}' and trashed = false";
+            request.Fields = "files(id, name, webViewLink)";
+            request.SupportsAllDrives = true;
+            request.IncludeItemsFromAllDrives = true;
+
+            var response = await request.ExecuteAsync();
+            var archivoDrive = response.Files?.FirstOrDefault();
+
+            if (archivoDrive != null)
+            {
+                bool yaPublicado = await _db.TrabajosPublicados.AnyAsync(t => t.MateriaEvaluacionId == eval.Id);
+                if (yaPublicado) continue;
+
+                DateTime? fechaRealExtraida = null;
+
+                // LECTURA EN MEMORIA (PdfPig) 
+                try
+                {
+                    var downloadRequest = driveService.Files.Get(archivoDrive.Id);
+                    using var memoryStream = new MemoryStream();
+                    await downloadRequest.DownloadAsync(memoryStream);
+                    memoryStream.Position = 0;
+
+                    using var pdfDocument = UglyToad.PdfPig.PdfDocument.Open(memoryStream);
+                    string textoCompleto = string.Join(" ", pdfDocument.GetPages().Select(p => p.Text));
+
+                    var regexFecha = new Regex(@"\b(\d{2}[/-]\d{2}[/-]\d{4})\b");
+                    var match = regexFecha.Match(textoCompleto);
+
+                    if (match.Success && DateTime.TryParseExact(match.Groups[1].Value.Replace("-", "/"), "dd/MM/yyyy", null, System.Globalization.DateTimeStyles.None, out DateTime parsedDate))
+                    {
+                        fechaRealExtraida = DateTime.SpecifyKind(parsedDate.Date.AddHours(23).AddMinutes(59).AddSeconds(59), DateTimeKind.Utc);
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"Error leyendo PDF de TSP {eval.CodigoMateria}: {ex.Message}");
+                }
+
+                if (fechaRealExtraida.HasValue)
+                {
+                    eval.FechaEntregaReal = fechaRealExtraida;
+                    _db.Evaluaciones.Update(eval);
+                }
+
+                _db.TrabajosPublicados.Add(new TrabajosPublicados
+                {
+                    MateriaEvaluacionId = eval.Id,
+                    UrlDrive = archivoDrive.WebViewLink,
+                    Tipo = eval.Tipo,
+                    FechaPublicacion = DateTime.UtcNow
+                });
+
+
+                await _db.SaveChangesAsync();
+                Console.WriteLine($"¡Trabajo encontrado y guardado!: {eval.CodigoMateria}");
+
+                // =========================================================
+                // MÓDULO 5: DISPARAR NOTIFICACIONES A SUSCRIPTORES
+                // =========================================================
+                var estudiantesInteresados = await _db.EstudiantesSuscritos
+                    .Where(e => e.MateriasInscritas.Contains(eval.CodigoMateria))
+                    .ToListAsync();
+
+                if (estudiantesInteresados.Any())
+                {
+                    Console.WriteLine($"Enviando {estudiantesInteresados.Count} alertas para la materia {eval.CodigoMateria}...");
+                    DateTime fechaMostrar = eval.FechaEntregaReal ?? eval.FechaEntrega;
+
+                    foreach (var estudiante in estudiantesInteresados)
+                    {
+                        try
+                        {
+                            await _emailService.EnviarNotificacionTrabajoPublicadoAsync(
+                                estudiante.Correo,
+                                estudiante.Nombre,
+                                eval.CodigoMateria,
+                                eval.Tipo,
+                                fechaMostrar,
+                                archivoDrive.WebViewLink
+                            );
+                            await Task.Delay(500); // Freno para no saturar Gmail
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error enviando correo a {estudiante.Correo}: {ex.Message}");
+                        }
+                    }
+                }
+
+            }
+        }
+    }
+
+    // ========================================================================
+    // 6B. MOTOR DE ESCANEO ESTRATÉGICO (TPs - Búsqueda de pendientes)
+    // ========================================================================
+    public async Task EscanearTpPendientesAsync()
+    {
+        var driveService = GetDriveService();
+
+        // Buscamos TPs en toda la base de datos que AÚN NO tengan un registro en TrabajosPublicados
+        var tpPendientes = await _db.Evaluaciones
+            .Where(e => e.Tipo.Contains("TP"))
+            .Where(e => !_db.TrabajosPublicados.Any(t => t.MateriaEvaluacionId == e.Id))
+            .ToListAsync();
+
+        if (!tpPendientes.Any()) return; // Si ya encontramos todos los TPs del semestre, no hacemos nada
+
+        foreach (var eval in tpPendientes)
+        {
+            if (string.IsNullOrEmpty(eval.CodigoMateria)) continue;
+
+            string prefijo = eval.CodigoMateria.Substring(0, 1);
+            if (!CarpetasTp.ContainsKey(prefijo)) continue;
+
+            string idCarpeta = CarpetasTp[prefijo];
+
+            var request = driveService.Files.List();
+            request.Q = $"'{idCarpeta}' in parents and name contains '{eval.CodigoMateria}' and trashed = false";
+            request.Fields = "files(id, name, webViewLink)";
+            request.SupportsAllDrives = true;
+            request.IncludeItemsFromAllDrives = true;
+
+            var response = await request.ExecuteAsync();
+            var archivoDrive = response.Files?.FirstOrDefault();
+
+            if (archivoDrive != null)
+            {
+                // Como es TP, no abrimos el PDF, solo guardamos el enlace directamente
+                _db.TrabajosPublicados.Add(new TrabajosPublicados
+                {
+                    MateriaEvaluacionId = eval.Id,
+                    UrlDrive = archivoDrive.WebViewLink,
+                    Tipo = eval.Tipo,
+                    FechaPublicacion = DateTime.UtcNow
+                });
+
+
+                await _db.SaveChangesAsync();
+                Console.WriteLine($"¡Trabajo encontrado y guardado!: {eval.CodigoMateria}");
+
+                // =========================================================
+                // MÓDULO 5: DISPARAR NOTIFICACIONES A SUSCRIPTORES
+                // =========================================================
+                var estudiantesInteresados = await _db.EstudiantesSuscritos
+                    .Where(e => e.MateriasInscritas.Contains(eval.CodigoMateria))
+                    .ToListAsync();
+
+                if (estudiantesInteresados.Any())
+                {
+                    Console.WriteLine($"Enviando {estudiantesInteresados.Count} alertas para la materia {eval.CodigoMateria}...");
+                    DateTime fechaMostrar = eval.FechaEntregaReal ?? eval.FechaEntrega;
+
+                    foreach (var estudiante in estudiantesInteresados)
+                    {
+                        try
+                        {
+                            await _emailService.EnviarNotificacionTrabajoPublicadoAsync(
+                                estudiante.Correo,
+                                estudiante.Nombre,
+                                eval.CodigoMateria,
+                                eval.Tipo,
+                                fechaMostrar,
+                                archivoDrive.WebViewLink
+                            );
+                            await Task.Delay(500); // Freno para no saturar Gmail
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine($"Error enviando correo a {estudiante.Correo}: {ex.Message}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
 
 
 }
