@@ -1,4 +1,4 @@
-﻿using MailKit.Net.Smtp;
+using MailKit.Net.Smtp;
 using MailKit.Security;
 using Microsoft.Extensions.Configuration;
 using MimeKit;
@@ -77,4 +77,57 @@ public class EmailService
             await smtp.DisconnectAsync(true);
         }
     }
+
+
+    // Agrega este método dentro de tu clase EmailService
+    // NUEVO MÉTODO PARA ALERTAS DE DRIVE
+    public async Task EnviarNotificacionTrabajoPublicadoAsync(string destinatario, string nombreEstudiante, string codigoMateria, string tipo, DateTime fechaEntrega, string urlDrive)
+    {
+        var email = new MimeMessage();
+        email.From.Add(new MailboxAddress(_config["SmtpSettings:SenderName"], _config["SmtpSettings:SenderEmail"]));
+        email.To.Add(new MailboxAddress(nombreEstudiante, destinatario));
+        email.Subject = $"🚨 ¡Tu {tipo} de la materia {codigoMateria} ya está disponible!";
+
+        string cuerpoHtml = $@"
+        <div style='font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 10px; overflow: hidden;'>
+            <div style='background-color: #0056b3; padding: 20px; text-align: center;'>
+                <h2 style='color: white; margin: 0;'>Alerta Automática UNA</h2>
+            </div>
+            <div style='padding: 20px;'>
+                <p>Hola <strong>{nombreEstudiante}</strong>,</p>
+                <p>El sistema automatizado de UnaPlan ha detectado que la universidad acaba de publicar un nuevo trabajo de tus materias inscritas:</p>
+                
+                <div style='background-color: #f8f9fa; padding: 15px; border-left: 4px solid #28a745; margin: 20px 0;'>
+                    <h3 style='margin: 0 0 10px 0;'>Materia: {codigoMateria}</h3>
+                    <p style='margin: 5px 0;'><strong>Tipo de Evaluación:</strong> {tipo}</p>
+                    <p style='margin: 5px 0;'><strong>Fecha Límite de Entrega:</strong> {fechaEntrega:dd/MM/yyyy}</p>
+                </div>
+
+                <div style='text-align: center; margin: 30px 0;'>
+                    <a href='{urlDrive}' style='background-color: #28a745; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;'>📄 Ver Documento Oficial en Drive</a>
+                </div>
+                
+                <p style='font-size: 12px; color: #777; text-align: center;'>
+                    Recibes este correo porque estás suscrito a las alertas de UnaPlan.<br>
+                </p>
+            </div>
+        </div>";
+
+        var builder = new BodyBuilder { HtmlBody = cuerpoHtml };
+        email.Body = builder.ToMessageBody();
+
+        using var smtp = new SmtpClient();
+        try
+        {
+            await smtp.ConnectAsync(_config["SmtpSettings:Host"], int.Parse(_config["SmtpSettings:Port"]!), SecureSocketOptions.StartTls);
+            await smtp.AuthenticateAsync(_config["SmtpSettings:SenderEmail"], _config["SmtpSettings:Password"]);
+            await smtp.SendAsync(email);
+        }
+        finally
+        {
+            await smtp.DisconnectAsync(true);
+        }
+    }
+
 }
+
