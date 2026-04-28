@@ -57,9 +57,29 @@ builder.Services.AddHostedService<SupabaseKeepAliveService>();
 // Registra el NotionWorkerService para que se ejecute continuamente en segundo plano
 builder.Services.AddHostedService<NotionWorkerService>();
 
-// Registramos el NotionPublisherService para que pueda ser inyectado en el Worker y publicar en Notion
-builder.Services.AddScoped<NotionPublisherService>();
 
+// Aquí es donde registramos el cliente de Notion, pero sin hardcodear el token
+// Registro del cliente de Notion usando IConfiguration para evitar Hardcoding
+builder.Services.AddSingleton<Notion.Client.INotionClient>(sp =>
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+
+    // El código busca la variable, pero no conoce su valor real aquí
+    var token = config["NotionSettings:NotionToken"];
+
+    if (string.IsNullOrEmpty(token))
+    {
+        throw new InvalidOperationException("El Token de Notion no se encuentra en las variables de entorno.");
+    }
+
+    return Notion.Client.NotionClientFactory.Create(new Notion.Client.ClientOptions
+    {
+        AuthToken = token
+    });
+});
+
+// Luego registras tu servicio que usará este cliente
+builder.Services.AddScoped<NotionPublisherService>();
 
 // ¡AQUÍ SE CONSTRUYE LA APP! (Ya no se pueden agregar más servicios al builder)
 var app = builder.Build();
