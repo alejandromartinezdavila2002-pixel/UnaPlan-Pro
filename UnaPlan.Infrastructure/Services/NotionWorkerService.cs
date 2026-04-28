@@ -156,14 +156,42 @@ public class NotionWorkerService : BackgroundService
                     var archivoExcelBytes = excelService.GenerarPlanDeEvaluacionExcel(listaParaExcel);
                     await emailService.EnviarPlanPersonalizadoAsync(correo, nombre, archivoExcelBytes, materiasNoEncontradas);
 
+                    // NUEVO: GUARDAR AL ESTUDIANTE PARA ALERTAS FUTURAS (Módulo 5)
+                    var estudianteDb = await db.EstudiantesSuscritos.FirstOrDefaultAsync(e => e.Correo == correo);
+
+                    if (estudianteDb == null)
+                    {
+                        // Es un estudiante nuevo, lo registramos con sus materias
+                        db.EstudiantesSuscritos.Add(new EstudiantesSuscritos
+                        {
+                            Nombre = nombre,
+                            Correo = correo,
+                            MateriasInscritas = listaMaterias,
+                            FechaSuscripcion = DateTime.UtcNow
+                        });
+                    }
+                    else
+                    {
+                        // Si ya existía, unimos las materias nuevas con las que ya tenía (evitando duplicados)
+                        estudianteDb.MateriasInscritas = estudianteDb.MateriasInscritas.Union(listaMaterias).ToList();
+                        db.EstudiantesSuscritos.Update(estudianteDb);
+                    }
+                    await db.SaveChangesAsync();
+                    // =======================================================================
+
                     // --- CIERRE DEL CICLO: Actualizamos el Estado en Notion a "Enviado" ---
                     var updateProps = new Dictionary<string, PropertyValue>
                     {
                         { "Estado", new SelectPropertyValue { Select = new SelectOption { Name = "Enviado" } } }
                     };
 
+
+
+
                     await _notionClient.Pages.UpdatePropertiesAsync(page.Id, updateProps);
                     _logger.LogInformation($"✅ Solicitud de {nombre} completada y actualizada en Notion.");
+
+                    await Task.Delay(400);
                 }
                 catch (Exception ex)
                 {
