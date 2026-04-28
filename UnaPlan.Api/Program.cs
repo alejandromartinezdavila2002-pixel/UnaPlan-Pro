@@ -428,6 +428,20 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 .WithSummary("Generar y enviar Plan de Evaluación en Excel")
 .WithDescription("Recibe las materias inscritas por el estudiante, genera un archivo Excel en memoria y se lo envía automáticamente por correo electrónico.");
 
+
+
+
+app.MapPost("/api/notion/sync-cartelera", async (NotionPublisherService publisherService) =>
+{
+    await publisherService.SincronizarCarteleraAsync();
+    return Results.Ok(new { mensaje = "Cartelera sincronizada correctamente con Notion." });
+})
+.WithTags("8. Sincronización Notion")
+.WithSummary("Actualiza la Cartelera Informativa")
+.WithDescription("Lee las próximas evaluaciones de Supabase y las publica automáticamente en la base de datos de la Cartelera de Notion.");
+
+
+
 // ---> ENDPOINT MÁGICO PARA ENGAÑAR A EXCEL Y ABRIR GOOGLE DRIVE
 app.MapGet("/api/go", (string target) =>
 {
