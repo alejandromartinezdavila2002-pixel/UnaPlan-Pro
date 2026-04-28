@@ -16,19 +16,19 @@ public class MateriaEvaluacion
 
     public DateTime FechaEntrega { get; set; }
 
-    // NUEVO: La fecha que el Worker extraerá del PDF (incluyendo hora límite 23:59)
+    // La fecha que el Worker extraerá del PDF
     public DateTime? FechaEntregaReal { get; set; }
 
     [Required]
     public string NombreMateria { get; set; } = string.Empty;
 
+    // ESTE es el campo que hace puente con la tabla PlanDeCurso
     public string? CodigoMateria { get; set; }
 
-    // Relación original con el Plan de Curso
-    public int PlanDeCursoId { get; set; }
-    [ForeignKey("PlanDeCursoId")]
+    // Relación original con el Plan de Curso corregida
+    [ForeignKey("CodigoMateria")]
     public PlanDeCurso? PlanDeCurso { get; set; }
 
-    // NUEVO: Relación 1 a 1 con el trabajo publicado en Drive
+    // Relación 1 a 1 con el trabajo publicado en Drive
     public TrabajosPublicados? TrabajoPublicado { get; set; }
 }
