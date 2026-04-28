@@ -76,7 +76,7 @@ public class NotionPublisherService
                     { "Materia", new TitlePropertyValue { Title = new List<RichTextBase> { new RichTextText { Text = new Text { Content = materiaNombre } } } } },
                     { "Código", new RichTextPropertyValue { RichText = new List<RichTextBase> { new RichTextText { Text = new Text { Content = codigoMateria } } } } },
                     { "Tipo", new SelectPropertyValue { Select = new SelectOption { Name = tipoEvaluacion } } },
-                    { "Fecha de Entrega", new DatePropertyValue { Date = new Date { Start = fechaAMostrar } } },
+                    { "Fecha de Entrega", new DatePropertyValue { Date = new Date { Start = fechaAMostrar.Date } } },
                     { "Semana", new NumberPropertyValue { Number = eval.Semana ?? 0 } }
                 };
 
