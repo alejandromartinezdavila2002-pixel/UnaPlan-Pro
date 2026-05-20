@@ -172,13 +172,21 @@ app.MapPost("/api/calendarios/confirm", async ([FromBody] CalendarioProcesado ca
 .WithDescription("Recibe el JSON verificado y lo inserta en las tablas de Supabase.");
 
 
-// ---> ENDPOINT 3: LIMPIAR TODO
+// ---> ENDPOINT 3: LIMPIAR TODO (PREPARACIÓN NUEVO SEMESTRE)
 app.MapDelete("/api/calendarios/clear-all", async (AppDbContext db) =>
 {
     try
     {
+        // 1. Borramos el historial de PDFs enviados (vital para que el scraper funcione en el nuevo semestre)
+        await db.TrabajosPublicados.ExecuteDeleteAsync();
+
+        // 2. Borramos todos los estudiantes suscritos y sus materias
+        await db.EstudiantesSuscritos.ExecuteDeleteAsync();
+
+        // 3. Borramos los calendarios (Si tu DB tiene ON DELETE CASCADE, esto borrará también las Evaluaciones)
         await db.Calendarios.ExecuteDeleteAsync();
-        return Results.Ok(new { mensaje = "Base de datos limpiada completamente." });
+
+        return Results.Ok(new { mensaje = "¡Nuevo Semestre Listo! Se han limpiado Calendarios, Estudiantes y Trabajos Publicados." });
     }
     catch (Exception ex)
     {
@@ -186,8 +194,8 @@ app.MapDelete("/api/calendarios/clear-all", async (AppDbContext db) =>
     }
 })
 .WithTags("2. Gestión de Base de Datos")
-.WithSummary("¡Peligro! Borra todo el historial")
-.WithDescription("Elimina permanentemente todos los calendarios y evaluaciones de la base de datos.");
+.WithSummary("¡Peligro! Reinicio de Semestre")
+.WithDescription("Elimina permanentemente todos los calendarios, estudiantes suscritos y el historial de trabajos publicados. Ideal para empezar un nuevo semestre desde cero.");
 
 
 
