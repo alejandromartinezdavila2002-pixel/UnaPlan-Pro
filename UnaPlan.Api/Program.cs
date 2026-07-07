@@ -6,6 +6,13 @@ using UnaPlan.Core.Entities;
 using UnaPlan.Infrastructure.Data;
 using UnaPlan.Infrastructure.Services;
 
+using Google.Apis.Auth.OAuth2;
+using Google.Apis.Auth.OAuth2.Flows;
+using Google.Apis.Auth.OAuth2.Responses;
+using Google.Apis.Gmail.v1;
+using Google.Apis.Services;
+using Google.Apis.Util.Store;
+
 var builder = WebApplication.CreateBuilder(args);
 
 // ========================================================================
@@ -48,6 +55,41 @@ builder.Services.AddScoped<CatalogoScraperService>();
 
 // Agregamos el servicio de generación de Excel y envío de correos
 builder.Services.AddScoped<ExcelGeneratorService>();
+
+// ========================================================================
+// 🛡️ REGISTRO ENTERPRISE: Google Gmail Service (Singleton)
+// ========================================================================
+builder.Services.AddSingleton<GmailService>(sp =>
+{
+    var config = sp.GetRequiredService<IConfiguration>();
+
+    var clientId = config["GmailApi:ClientId"] ?? throw new InvalidOperationException("Falta GmailApi:ClientId");
+    var clientSecret = config["GmailApi:ClientSecret"] ?? throw new InvalidOperationException("Falta GmailApi:ClientSecret");
+    var refreshToken = config["GmailApi:RefreshToken"] ?? throw new InvalidOperationException("Falta GmailApi:RefreshToken");
+
+    var flow = new GoogleAuthorizationCodeFlow(new GoogleAuthorizationCodeFlow.Initializer
+    {
+        ClientSecrets = new ClientSecrets
+        {
+            ClientId = clientId,
+            ClientSecret = clientSecret
+        },
+        Scopes = new[] { GmailService.Scope.GmailSend },
+        DataStore = new NullDataStore() // 🛡️ Clave maestra: Desactiva el File System Lock en Windows
+    });
+
+    var credential = new UserCredential(flow, "unaplan-system", new TokenResponse
+    {
+        RefreshToken = refreshToken
+    });
+
+    return new GmailService(new BaseClientService.Initializer
+    {
+        HttpClientInitializer = credential,
+        ApplicationName = "UnaPlan"
+    });
+});
+
 builder.Services.AddScoped<EmailService>();
 
 

@@ -11,12 +11,14 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using UnaPlan.Core.Entities;
+using Google.Apis.Util.Store;
 
 namespace UnaPlan.Infrastructure.Services;
 
 public class EmailService
 {
     private readonly IConfiguration _config;
+    private readonly GmailService _gmailService;
 
     // =========================================================================
     // 🛡️ MEMORIA DEL GUARDIÁN: Control de límite diario
@@ -25,9 +27,10 @@ public class EmailService
     private static DateTime _fechaUltimoEnvio = DateTime.Today;
     private const int LIMITE_DIARIO_SEGURO = 450; // Dejamos 50 de margen para el límite de 500 de Google
 
-    public EmailService(IConfiguration config)
+    public EmailService(IConfiguration config, GmailService gmailService)
     {
         _config = config;
+        _gmailService = gmailService;
     }
 
     // =========================================================================
@@ -55,32 +58,53 @@ public class EmailService
     // =========================================================================
     // 🚀 MOTOR CENTRAL: Se encarga de la autorización OAuth2 y el envío HTTP
     // =========================================================================
+    //private async Task EnviarConGmailApiAsync(MimeMessage email)
+    //{
+    //    // 1. Configuramos las credenciales extraídas de tu secrets.json (o variables de entorno en Render)
+    //    var flow = new GoogleAuthorizationCodeFlow(new GoogleAuthorizationCodeFlow.Initializer
+    //    {
+    //        ClientSecrets = new ClientSecrets
+    //        {
+    //            ClientId = _config["GmailApi:ClientId"],
+    //            ClientSecret = _config["GmailApi:ClientSecret"]
+    //        },
+    //        Scopes = new[] { GmailService.Scope.GmailSend }
+    //    });
+
+    //    var credential = new UserCredential(flow, "user", new TokenResponse
+    //    {
+    //        RefreshToken = _config["GmailApi:RefreshToken"]
+    //    });
+
+    //    // 2. Iniciamos el cliente HTTP de Gmail
+    //    using var service = new GmailService(new BaseClientService.Initializer()
+    //    {
+    //        HttpClientInitializer = credential,
+    //        ApplicationName = "UnaPlan"
+    //    });
+
+    //    // 3. Convertimos el correo a Base64Url (El estándar RFC 2822 que exige Google)
+    //    using var memoryStream = new MemoryStream();
+    //    await email.WriteToAsync(memoryStream);
+
+    //    var base64Url = Convert.ToBase64String(memoryStream.ToArray())
+    //        .Replace('+', '-')
+    //        .Replace('/', '_')
+    //        .Replace("=", "");
+
+    //    var message = new Google.Apis.Gmail.v1.Data.Message { Raw = base64Url };
+
+    //    // 4. Despachamos el correo por el puerto 443 (HTTPS)
+    //    await service.Users.Messages.Send(message, "me").ExecuteAsync();
+    //}
+
+
+    // =========================================================================
+    // 🚀 MOTOR CENTRAL OPTIMIZADO (Consumiendo el Singleton)
+    // =========================================================================
     private async Task EnviarConGmailApiAsync(MimeMessage email)
     {
-        // 1. Configuramos las credenciales extraídas de tu secrets.json (o variables de entorno en Render)
-        var flow = new GoogleAuthorizationCodeFlow(new GoogleAuthorizationCodeFlow.Initializer
-        {
-            ClientSecrets = new ClientSecrets
-            {
-                ClientId = _config["GmailApi:ClientId"],
-                ClientSecret = _config["GmailApi:ClientSecret"]
-            },
-            Scopes = new[] { GmailService.Scope.GmailSend }
-        });
-
-        var credential = new UserCredential(flow, "user", new TokenResponse
-        {
-            RefreshToken = _config["GmailApi:RefreshToken"]
-        });
-
-        // 2. Iniciamos el cliente HTTP de Gmail
-        using var service = new GmailService(new BaseClientService.Initializer()
-        {
-            HttpClientInitializer = credential,
-            ApplicationName = "UnaPlan"
-        });
-
-        // 3. Convertimos el correo a Base64Url (El estándar RFC 2822 que exige Google)
+        // 1. Convertimos el correo a Base64Url (El estándar RFC 2822)
         using var memoryStream = new MemoryStream();
         await email.WriteToAsync(memoryStream);
 
@@ -91,8 +115,9 @@ public class EmailService
 
         var message = new Google.Apis.Gmail.v1.Data.Message { Raw = base64Url };
 
-        // 4. Despachamos el correo por el puerto 443 (HTTPS)
-        await service.Users.Messages.Send(message, "me").ExecuteAsync();
+        // 2. Disparamos usando el motor global con un límite resiliente de 15 segundos
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        await _gmailService.Users.Messages.Send(message, "me").ExecuteAsync(cts.Token);
     }
 
     // =========================================================================
