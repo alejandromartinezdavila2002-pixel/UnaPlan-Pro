@@ -20,4 +20,8 @@ public class EstudiantesSuscritos
     public List<string> MateriasInscritas { get; set; } = new();
 
     public DateTime FechaSuscripcion { get; set; } = DateTime.UtcNow;
+
+    // NUEVA COLUMNA CRM: Registra la fecha del ultimátum (15 días). 
+    // Es Nullable (DateTime?) porque los estudiantes activos no tendrán advertencias pendientes.
+    public DateTime? FechaAdvertencia { get; set; }
 }

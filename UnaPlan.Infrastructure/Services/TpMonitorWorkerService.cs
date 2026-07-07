@@ -1,4 +1,10 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.EntityFrameworkCore;
+using UnaPlan.Infrastructure.Data;
+using System;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -9,8 +15,9 @@ public class TpMonitorWorkerService : BackgroundService
     private readonly ILogger<TpMonitorWorkerService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
 
-    // Memoria RAM para evitar escaneos dobles en el mismo minuto
-    private int _ultimoMinutoEjecucion = -1;
+    private int _ultimoDiaRevisado = -1;
+    private bool _hayTpsPendientes = false;
+    private int _ultimoMinutoEscaneado = -1;
 
     public TpMonitorWorkerService(ILogger<TpMonitorWorkerService> logger, IServiceScopeFactory scopeFactory)
     {
@@ -20,40 +27,102 @@ public class TpMonitorWorkerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🟢 Micro-Worker TP iniciado: TPs (Sábados, cada 15 min hasta las 8:00 AM).");
+        _logger.LogInformation("🟢 Micro-Worker TP Activado (Modo Sabatino: 6 AM - 9 AM).");
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var horaVenezuela = DateTime.UtcNow.AddHours(-4);
+                var veTime = DateTime.UtcNow.AddHours(-4);
 
-                // Lógica estricta: Solo hasta las 8:00 AM (ni un minuto más)
-                bool esAntesOIgualA8AM = horaVenezuela.Hour < 8 || (horaVenezuela.Hour == 8 && horaVenezuela.Minute == 0);
-
-                if (horaVenezuela.DayOfWeek == DayOfWeek.Saturday && esAntesOIgualA8AM)
+                if (veTime.Day != _ultimoDiaRevisado && veTime.Hour == 0)
                 {
-                    if (horaVenezuela.Minute % 15 == 0 && _ultimoMinutoEjecucion != horaVenezuela.Minute)
+                    _ultimoDiaRevisado = veTime.Day;
+                    _hayTpsPendientes = false;
+                    _ultimoMinutoEscaneado = -1;
+                }
+
+                if (veTime.DayOfWeek == DayOfWeek.Saturday)
+                {
+                    // Fase 1: Pre-validación a partir de las 6:00 AM
+                    if (veTime.Hour >= 6 && veTime.Day != _ultimoDiaRevisado)
                     {
-                        _ultimoMinutoEjecucion = horaVenezuela.Minute;
-                        _logger.LogInformation($"[TP Monitor] Hora detectada ({horaVenezuela:HH:mm}). Iniciando escaneo de TPs...");
+                        await ValidarTpsPendientesGlobalesAsync(stoppingToken);
+                    }
 
-                        using var scope = _scopeFactory.CreateScope();
-                        var scraper = scope.ServiceProvider.GetRequiredService<CatalogoScraperService>();
+                    // Fase 2: Patrullaje de 06:00 AM a 09:00 AM
+                    if (_hayTpsPendientes && veTime.Hour >= 6)
+                    {
+                        // Límite de Cordura (Hard Stop): Las 09:00 AM
+                        if (veTime.Hour >= 9)
+                        {
+                            _logger.LogWarning("[TP] ⚠️ Límite de las 9:00 AM alcanzado. Abortando búsqueda de TPs.");
+                            _hayTpsPendientes = false;
+                        }
+                        else
+                        {
+                            // Escanear en los minutos exactos (00, 15, 30, 45)
+                            if (veTime.Minute % 15 == 0 && veTime.Minute != _ultimoMinutoEscaneado)
+                            {
+                                _ultimoMinutoEscaneado = veTime.Minute;
+                                _logger.LogInformation($"[TP] Escaneando a las {veTime:HH:mm}...");
 
-                        await scraper.EscanearTpPendientesAsync();
+                                using var scope = _scopeFactory.CreateScope();
+                                var scraper = scope.ServiceProvider.GetRequiredService<CatalogoScraperService>();
 
-                        _logger.LogInformation("[TP Monitor] Escaneo finalizado. Liberando memoria...");
+                                await scraper.EscanearTpPendientesAsync();
+                                await VerificarSiQuedanTpsPendientesAsync(stoppingToken);
+                            }
+                        }
                     }
                 }
+
+                await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
             }
             catch (Exception ex)
             {
-                _logger.LogError($"❌ Error en TP Monitor: {ex.Message}");
+                _logger.LogError(ex, "❌ Error crítico en el vigilante de TP.");
+                await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
             }
+        }
+    }
 
-            // Despertamos cada 30 segundos para garantizar no saltarnos el minuto exacto
-            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+    private async Task ValidarTpsPendientesGlobalesAsync(CancellationToken token)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var cantidadPendientes = await dbContext.Evaluaciones
+            .Where(e => e.Tipo.StartsWith("TP"))
+            .Where(e => !dbContext.TrabajosPublicados.Any(t => t.MateriaEvaluacionId == e.Id))
+            .CountAsync(token);
+
+        if (cantidadPendientes > 0)
+        {
+            _hayTpsPendientes = true;
+            _logger.LogInformation($"[TP] ✅ Pendientes encontrados: {cantidadPendientes}. Patrullaje activo hasta las 9:00 AM.");
+        }
+        else
+        {
+            _hayTpsPendientes = false;
+        }
+
+        _ultimoDiaRevisado = DateTime.UtcNow.AddHours(-4).Day;
+    }
+
+    private async Task VerificarSiQuedanTpsPendientesAsync(CancellationToken token)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        bool quedanPendientes = await dbContext.Evaluaciones
+            .Where(e => e.Tipo.StartsWith("TP"))
+            .AnyAsync(e => !dbContext.TrabajosPublicados.Any(t => t.MateriaEvaluacionId == e.Id), token);
+
+        if (!quedanPendientes)
+        {
+            _logger.LogInformation("[TP] 🏆 Semestre al día. Vigilante TP apagado hasta el próximo sábado.");
+            _hayTpsPendientes = false;
         }
     }
 }

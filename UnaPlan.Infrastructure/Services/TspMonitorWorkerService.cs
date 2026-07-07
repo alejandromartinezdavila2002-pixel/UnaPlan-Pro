@@ -1,4 +1,12 @@
-﻿using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.EntityFrameworkCore;
+using UnaPlan.Infrastructure.Data;
+using UnaPlan.Core.Entities;
+using System;
+using System.Collections.Generic;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 
@@ -9,8 +17,11 @@ public class TspMonitorWorkerService : BackgroundService
     private readonly ILogger<TspMonitorWorkerService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
 
-    // Memoria RAM para evitar ejecuciones dobles en el mismo minuto
-    private int _ultimoMinutoEjecucion = -1;
+    // Memoria caché interna (Protege la base de datos y la CPU)
+    private int _ultimoDiaRevisado = -1;
+    private bool _hayTspParaHoy = false;
+    private List<string> _materiasTspEsperadas = new List<string>();
+    private int _ultimoMinutoEscaneado = -1;
 
     public TspMonitorWorkerService(ILogger<TspMonitorWorkerService> logger, IServiceScopeFactory scopeFactory)
     {
@@ -20,40 +31,126 @@ public class TspMonitorWorkerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🟢 Micro-Worker TSP iniciado: TSPs (Desfasado: minutos 5, 20, 35, 50 entre 6 AM y 8 AM).");
+        _logger.LogInformation("🕵️‍♂️ Vigilante de TSP Activado (Modo Sabatino Inteligente).");
 
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                var horaVenezuela = DateTime.UtcNow.AddHours(-4);
+                var veTime = DateTime.UtcNow.AddHours(-4);
 
-                // Ventana de patrullaje: Desde las 6:00 AM hasta las 8:05 AM (para abarcar el último turno del desfase)
-                bool esHorarioPlanificado = horaVenezuela.Hour >= 6 && (horaVenezuela.Hour < 8 || (horaVenezuela.Hour == 8 && horaVenezuela.Minute <= 5));
-
-                if (esHorarioPlanificado)
+                // Resetear la memoria caché local a la medianoche
+                if (veTime.Day != _ultimoDiaRevisado && veTime.Hour == 0)
                 {
-                    // Lógica de Desfase: Dispara 5 minutos DESPUÉS del TP (5, 20, 35, 50)
-                    if (horaVenezuela.Minute % 15 == 5 && _ultimoMinutoEjecucion != horaVenezuela.Minute)
+                    _ultimoDiaRevisado = veTime.Day;
+                    _hayTspParaHoy = false;
+                    _materiasTspEsperadas.Clear();
+                    _ultimoMinutoEscaneado = -1;
+                }
+
+                // REGLA MAESTRA: SOLO SÁBADOS
+                if (veTime.DayOfWeek == DayOfWeek.Saturday)
+                {
+                    // FASE 1: PRE-VALIDACIÓN (A partir de las 5:00 AM)
+                    if (veTime.Hour >= 5 && veTime.Day != _ultimoDiaRevisado)
                     {
-                        _ultimoMinutoEjecucion = horaVenezuela.Minute;
-                        _logger.LogInformation($"[TSP Monitor] Turno activo ({horaVenezuela:HH:mm}). Comprobando calendario para hoy: {horaVenezuela:dd/MM/yyyy}");
+                        await ValidarTspProgramadosParaHoyAsync(veTime, stoppingToken);
+                    }
 
-                        using var scope = _scopeFactory.CreateScope();
-                        var scraper = scope.ServiceProvider.GetRequiredService<CatalogoScraperService>();
+                    // FASE 2: BÚSQUEDA Y EXTRACCIÓN DINÁMICA
+                    if (_hayTspParaHoy && veTime.Hour >= 6)
+                    {
+                        // Límite de Cordura (Hard Stop): Las 14:00 (2:00 PM)
+                        if (veTime.Hour >= 14)
+                        {
+                            _logger.LogWarning($"[TSP] ⚠️ Límite de las 2:00 PM alcanzado. La universidad no publicó los TSP de: {string.Join(", ", _materiasTspEsperadas)}. Abortando búsqueda.");
+                            _hayTspParaHoy = false;
+                            _materiasTspEsperadas.Clear();
+                        }
+                        else
+                        {
+                            // Escanear en minutos desfasados (05, 20, 35, 50)
+                            if ((veTime.Minute == 5 || veTime.Minute == 20 || veTime.Minute == 35 || veTime.Minute == 50)
+                                && veTime.Minute != _ultimoMinutoEscaneado)
+                            {
+                                _ultimoMinutoEscaneado = veTime.Minute;
+                                _logger.LogInformation($"[TSP] Arrancando escáner Drive. Faltan {_materiasTspEsperadas.Count} TSPs por publicar...");
 
-                        // El scraper se encargará internamente de verificar si hoy hay un TSP antes de ir a Drive
-                        await scraper.EscanearTspAsync(horaVenezuela.Date);
+                                using var scope = _scopeFactory.CreateScope();
+
+                                // Instanciamos el scraper real y le pasamos la fecha de hoy
+                                var scraper = scope.ServiceProvider.GetRequiredService<CatalogoScraperService>();
+                                await scraper.EscanearTspAsync(veTime.Date);
+
+                                // Evaluamos qué se encontró para hacer el Cierre Prematuro si aplica
+                                await ActualizarMateriasFaltantesAsync(stoppingToken);
+                            }
+                        }
                     }
                 }
+
+                await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
             }
             catch (Exception ex)
             {
-                _logger.LogError($"❌ Error en TSP Monitor: {ex.Message}");
+                _logger.LogError(ex, "❌ Error crítico en el vigilante de TSP.");
+                await Task.Delay(TimeSpan.FromSeconds(60), stoppingToken);
             }
+        }
+    }
 
-            // Despertamos cada 30 segundos para máxima precisión
-            await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
+    private async Task ValidarTspProgramadosParaHoyAsync(DateTime veTime, CancellationToken token)
+    {
+        _logger.LogInformation("[TSP] 5:00 AM alcanzadas. Consultando Calendario de Evaluaciones para hoy...");
+
+        using var scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var materiasProgramadas = await dbContext.Evaluaciones
+            .Where(e => e.Tipo.StartsWith("TSP") && e.FechaEntrega.Date == veTime.Date && e.CodigoMateria != null)
+            .Select(e => e.CodigoMateria!)
+            .Distinct()
+            .ToListAsync(token);
+
+        if (materiasProgramadas.Any())
+        {
+            _hayTspParaHoy = true;
+            _materiasTspEsperadas = materiasProgramadas;
+            _logger.LogInformation($"[TSP] ✅ ALERTA: El calendario indica TSP para {materiasProgramadas.Count} materias hoy. El escáner Drive arrancará a las 6:00 AM.");
+        }
+        else
+        {
+            _hayTspParaHoy = false;
+            _logger.LogInformation("[TSP] 💤 El calendario está vacío para hoy. El escáner Drive no se activará en todo el fin de semana.");
+        }
+
+        _ultimoDiaRevisado = veTime.Day;
+    }
+
+    private async Task ActualizarMateriasFaltantesAsync(CancellationToken token)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+
+        var materiasEncontradas = await dbContext.TrabajosPublicados
+            .Where(t => t.Evaluacion != null
+                        && t.Evaluacion.Tipo.StartsWith("TSP")
+                        && t.Evaluacion.CodigoMateria != null
+                        && _materiasTspEsperadas.Contains(t.Evaluacion.CodigoMateria))
+            .Select(t => t.Evaluacion!.CodigoMateria!)
+            .Distinct()
+            .ToListAsync(token);
+
+        foreach (var materia in materiasEncontradas)
+        {
+            _materiasTspEsperadas.Remove(materia);
+            _logger.LogInformation($"[TSP] ✅ TSP de la materia {materia} encontrado y guardado. Removido de la cola de espera.");
+        }
+
+        if (!_materiasTspEsperadas.Any())
+        {
+            _logger.LogInformation("[TSP] 🎉 ¡Éxito total! Todos los TSPs programados para hoy fueron publicados. El vigilante de TSP se apaga hasta el próximo sábado.");
+            _hayTspParaHoy = false;
         }
     }
 }
