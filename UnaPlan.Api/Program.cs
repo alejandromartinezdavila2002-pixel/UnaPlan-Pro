@@ -518,6 +518,123 @@ app.MapGet("/api/ping", () => Results.Ok(new { mensaje = "API Despierta y lista"
 //})
 //.ExcludeFromDescription();
 
+// ========================================================================
+// 6. PANEL DE ADMINISTRACIÓN - SISTEMA CRM DE RETENCIÓN DE ESTUDIANTES
+// ========================================================================
+
+// ---> ENDPOINT CRM 1: ENVIAR CONVOCATORIA DE INICIO DE SEMESTRE
+app.MapPost("/api/admin/crm/convocatoria-semestre", async (AppDbContext db, EmailService emailService) =>
+{
+    try
+    {
+        // Obtenemos todos los estudiantes que tienen sus materias limpias (Listas para el nuevo periodo)
+        var estudiantesAConsultar = await db.EstudiantesSuscritos
+            .Where(e => e.MateriasInscritas.Count == 0)
+            .ToListAsync();
+
+        if (!estudiantesAConsultar.Any())
+            return Results.Ok(new { mensaje = "No se encontraron estudiantes con suscripciones vacías para notificar en este periodo." });
+
+        // Disparamos el motor masivo balanceado
+        var resultado = await emailService.EnviarConvocatoriaNuevoSemestreMasivoAsync(estudiantesAConsultar);
+
+        return Results.Ok(new
+        {
+            mensaje = "Proceso de broadcast completado con éxito.",
+            totalEstudiantesProcesados = estudiantesAConsultar.Count,
+            enviosExitosos = resultado.exitosos,
+            enviosFallidos = resultado.fallidos
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Fallo en la orquestación del envío masivo: {ex.Message}");
+    }
+})
+.WithTags("6. Panel de Administración - CRM")
+.WithSummary("1. Enviar aviso masivo de nuevo semestre")
+.WithDescription("Extrae a todos los estudiantes de la base de datos cuyas materias fueron vaciadas y les envía un correo masivo, notificándoles que ya pueden solicitar sus nuevos planes.");
+
+
+// ---> ENDPOINT CRM 2: PROCESAR ADVERTENCIAS DE INACTIVIDAD (EL ULTIMÁTUM)
+app.MapPost("/api/admin/crm/procesar-advertencias", async (AppDbContext db, EmailService emailService) =>
+{
+    try
+    {
+        // Buscamos estudiantes que sigan inactivos (arreglo vacío) y que no hayan sido advertidos todavía
+        var estudiantesInactivos = await db.EstudiantesSuscritos
+            .Where(e => e.MateriasInscritas.Count == 0 && e.FechaAdvertencia == null)
+            .ToListAsync();
+
+        if (!estudiantesInactivos.Any())
+            return Results.Ok(new { mensaje = "Todos los estudiantes inactivos ya se encuentran advertidos o no hay usuarios registrados." });
+
+        int advertidosContador = 0;
+
+        foreach (var estudiante in estudiantesInactivos)
+        {
+            try
+            {
+                // Enviamos la plantilla de alerta de 15 días
+                await emailService.EnviarCorreoAdvertenciaInactividadAsync(estudiante);
+
+                // Estampamos de manera inalterable la fecha exacta del aviso en Supabase
+                estudiante.FechaAdvertencia = DateTime.UtcNow;
+                advertidosContador++;
+            }
+            catch
+            {
+                // Si falla un correo individual (ej. sintaxis errónea), continuamos con el bucle para no frenar el lote
+            }
+        }
+
+        if (advertidosContador > 0)
+        {
+            await db.SaveChangesAsync();
+        }
+
+        return Results.Ok(new { mensaje = $"Proceso finalizado. Se enviaron {advertidosContador} correos de ultimátum y se marcaron en base de datos." });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Error al procesar las advertencias: {ex.Message}");
+    }
+})
+.WithTags("6. Panel de Administración - CRM")
+.WithSummary("2. Ejecutar ultimátum a usuarios inactivos")
+.WithDescription("Detecta a los estudiantes que no han registrado materias en el ciclo actual, les despacha la alerta de remoción y guarda la estampa de tiempo.");
+
+
+// ---> ENDPOINT CRM 3: EJECUTAR PURGA DE USUARIOS FANTASMAS (EL VERDUGO)
+app.MapDelete("/api/admin/crm/purgar-fantasmas", async (AppDbContext db) =>
+{
+    try
+    {
+        // El umbral crítico ocurre cuando la fecha de advertencia supera los 15 días en el pasado
+        var fechaLimite = DateTime.UtcNow.AddDays(-15);
+
+        // El verdugo ejecuta un Hard Delete únicamente si:
+        // 1. Fue advertido hace más de 15 días.
+        // 2. 🚨 Sigue con la lista de materias vacía (Si inscribió en Notion, se salvó automáticamente).
+        var filasBorradas = await db.EstudiantesSuscritos
+            .Where(e => e.FechaAdvertencia != null && e.FechaAdvertencia <= fechaLimite && e.MateriasInscritas.Count == 0)
+            .ExecuteDeleteAsync();
+
+        return Results.Ok(new
+        {
+            mensaje = "Limpieza de base de datos finalizada.",
+            usuariosFantasmasEliminados = filasBorradas
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Error al ejecutar la purga en Supabase: {ex.Message}");
+    }
+})
+.WithTags("6. Panel de Administración - CRM")
+.WithSummary("3. Purga total de usuarios fantasmas (Hard Delete)")
+.WithDescription("Elimina permanentemente de Supabase a todos aquellos estudiantes que ignoraron el ultimátum de 15 días y mantuvieron su cuenta sin actividad académica.");
+
 app.Run();
 
 // ========================================================================

@@ -218,4 +218,79 @@ public class EmailService
         // 🚀 Despachamos usando el motor central OAuth2 sin parámetros extra superfluos
         await EnviarConGmailApiAsync(email);
     }
+
+
+
+
+    // =========================================================================
+    // 🔔 CRM: Broadcast Masivo de Convocatoria de Nuevo Semestre
+    // =========================================================================
+    public async Task<(int exitosos, int fallidos)> EnviarConvocatoriaNuevoSemestreMasivoAsync(List<EstudiantesSuscritos> estudiantes)
+    {
+        int exitosos = 0;
+        int fallidos = 0;
+        int contadorActual = 1; // Para saber por cuál vamos
+
+        Console.WriteLine($"\n[CRM] 🚀 INICIANDO BROADCAST MASIVO PARA {estudiantes.Count} ESTUDIANTES...");
+
+        foreach (var estudiante in estudiantes)
+        {
+            try
+            {
+                Console.Write($"[CRM] {contadorActual}/{estudiantes.Count} - Enviando a {estudiante.Correo}... ");
+
+                var email = new MimeMessage();
+                email.From.Add(new MailboxAddress(_config["SmtpSettings:SenderName"], _config["SmtpSettings:SenderEmail"]));
+                email.To.Add(new MailboxAddress(estudiante.Nombre, estudiante.Correo));
+                email.Subject = $"🚀 ¡Inicia el nuevo semestre! Actualiza tus materias en UnaPlan";
+
+                var builder = new BodyBuilder
+                {
+                    HtmlBody = $@"
+                <div style='font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #0056b3; border-radius: 8px; overflow: hidden;'>
+                    <div style='background-color: #0056b3; padding: 20px; text-align: center;'>
+                        <h2 style='color: white; margin: 0;'>¡Nuevo Periodo Académico UNA! 🎓</h2>
+                    </div>
+                    <div style='padding: 20px;'>
+                        <p>Hola, <strong>{estudiante.Nombre}</strong>.</p>
+                        <p>Un nuevo ciclo académico ha comenzado. En <b>UnaPlan</b> hemos reiniciado y limpiado el registro de asignaturas para dejar tu cuenta totalmente optimizada para este semestre.</p>
+                        <p>Ya puedes ingresar a la plataforma, registrar las nuevas materias que vas a cursar y descargar tu <strong>Plan de Evaluación Personalizado en Excel</strong> con las fechas actualizadas de la universidad.</p>
+                        <div style='text-align: center; margin: 30px 0;'>
+                            <a href='https://unaplan.vercel.app' style='background-color: #0056b3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;'>🌐 Ir a UnaPlan e Inscribir Materias</a>
+                        </div>
+                        <p style='font-size: 12px; color: #777; text-align: center;'>Recuerda mantener tus materias al día para recibir las alertas en tiempo real de TP y TSP directamente en tu bandeja de entrada.</p>
+                    </div>
+                </div>"
+                };
+                email.Body = builder.ToMessageBody();
+
+                // 🛡️ Guardián de seguridad: Verifica el límite diario antes de procesar
+                VerificarYRegistrarEnvio();
+
+                // 🚀 Envío individual a través de Gmail API
+                await EnviarConGmailApiAsync(email);
+
+                Console.WriteLine("✅ ÉXITO");
+                exitosos++;
+
+                // Pequeño delay para no saturar Google
+                await Task.Delay(200);
+            }
+            catch (InvalidOperationException ex)
+            {
+                Console.WriteLine($"\n[CRM] 🛑 GUARDIÁN ACTIVADO: {ex.Message}");
+                throw new InvalidOperationException($"Proceso masivo interrumpido. {ex.Message} (Enviados con éxito en este lote: {exitosos})");
+            }
+            catch (Exception ex) // ¡Atrapamos la excepción real para verla!
+            {
+                Console.WriteLine($"❌ FALLÓ: {ex.Message}");
+                fallidos++;
+            }
+
+            contadorActual++;
+        }
+
+        Console.WriteLine($"[CRM] 🏁 BROADCAST FINALIZADO. Exitosos: {exitosos} | Fallidos: {fallidos}\n");
+        return (exitosos, fallidos);
+    }
 }
