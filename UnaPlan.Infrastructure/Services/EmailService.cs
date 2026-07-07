@@ -10,6 +10,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using UnaPlan.Core.Entities;
 
 namespace UnaPlan.Infrastructure.Services;
 
@@ -17,13 +18,42 @@ public class EmailService
 {
     private readonly IConfiguration _config;
 
+    // =========================================================================
+    // 🛡️ MEMORIA DEL GUARDIÁN: Control de límite diario
+    // =========================================================================
+    private static int _correosEnviadosHoy = 0;
+    private static DateTime _fechaUltimoEnvio = DateTime.Today;
+    private const int LIMITE_DIARIO_SEGURO = 450; // Dejamos 50 de margen para el límite de 500 de Google
+
     public EmailService(IConfiguration config)
     {
         _config = config;
     }
 
     // =========================================================================
-    // 🚀 NUEVO MOTOR CENTRAL: Se encarga de la autorización OAuth2 y el envío HTTP
+    // 🛡️ MÉTODO GUARDIÁN: Verifica el límite antes de enviar
+    // =========================================================================
+    private void VerificarYRegistrarEnvio()
+    {
+        // Si cambió el día desde el último envío, reseteamos el contador
+        if (DateTime.Today > _fechaUltimoEnvio)
+        {
+            _correosEnviadosHoy = 0;
+            _fechaUltimoEnvio = DateTime.Today;
+        }
+
+        // Verificamos si ya alcanzamos el límite seguro
+        if (_correosEnviadosHoy >= LIMITE_DIARIO_SEGURO)
+        {
+            throw new InvalidOperationException($"Límite diario de seguridad de {LIMITE_DIARIO_SEGURO} correos alcanzado. Por favor, reanude los envíos masivos mañana.");
+        }
+
+        // Registramos que estamos a punto de enviar un correo más
+        _correosEnviadosHoy++;
+    }
+
+    // =========================================================================
+    // 🚀 MOTOR CENTRAL: Se encarga de la autorización OAuth2 y el envío HTTP
     // =========================================================================
     private async Task EnviarConGmailApiAsync(MimeMessage email)
     {
@@ -105,7 +135,9 @@ public class EmailService
         builder.Attachments.Add("Mi_Plan_De_Evaluacion_UNA.xlsx", archivoExcel, ContentType.Parse("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"));
         email.Body = builder.ToMessageBody();
 
-        // Llamamos al nuevo motor seguro
+        // Llamamos al guardián ANTES de enviar
+        VerificarYRegistrarEnvio();
+        // Llamamos al motor seguro de Gmail API
         await EnviarConGmailApiAsync(email);
     }
 
@@ -139,7 +171,51 @@ public class EmailService
         var builder = new BodyBuilder { HtmlBody = cuerpoHtml };
         email.Body = builder.ToMessageBody();
 
-        // Llamamos al nuevo motor seguro
+        // Llamamos al guardián ANTES de enviar
+        VerificarYRegistrarEnvio();
+        // Llamamos al motor seguro de Gmail API
+        await EnviarConGmailApiAsync(email);
+    }
+
+    // =========================================================================
+    // 🔔 CRM: Alerta de Inactividad Semestral
+    // =========================================================================
+    public async Task EnviarCorreoAdvertenciaInactividadAsync(EstudiantesSuscritos estudiante)
+    {
+        var email = new MimeMessage();
+        email.From.Add(new MailboxAddress(_config["SmtpSettings:SenderName"], _config["SmtpSettings:SenderEmail"]));
+        email.To.Add(new MailboxAddress(estudiante.Nombre, estudiante.Correo));
+        email.Subject = $"⚠️ Alerta de Suscripción: Tu servicio Prime de UnaPlan está por vencer";
+
+        var builder = new BodyBuilder
+        {
+            HtmlBody = $@"
+            <div style='font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #ffd54f; border-radius: 8px; overflow: hidden;'>
+                <div style='background-color: #fff3e0; padding: 15px; text-align: center; border-bottom: 2px solid #ffe082;'>
+                    <h3 style='color: #e65100; margin: 0;'>⚠️ AVISO DE INACTIVIDAD SEMESTRAL</h3>
+                </div>
+                <div style='padding: 20px;'>
+                    <p>Hola, <strong>{estudiante.Nombre}</strong>.</p>
+                    <p>Hemos notado que durante el inicio de este lapso académico no has hecho uso de nuestros servicios de seguimiento automatizado y tu lista de materias se encuentra vacía.</p>
+                    <p>En <b>UnaPlan</b> mantenemos políticas estrictas de optimización de almacenamiento. Si no registras tus materias en los próximos <strong>15 días</strong>, el sistema procederá a realizar una remoción de tus datos de nuestra base de datos.</p>
+                    <div style='background-color: #fbe9e7; padding: 15px; border-left: 4px solid #d84315; margin: 20px 0;'>
+                        <strong>Al ser removido perderás:</strong>
+                        <ul style='margin: 5px 0 0 0; padding-left: 20px;'>
+                            <li>El acceso instantáneo a la generación automatizada de planes en Excel.</li>
+                            <li>Las alertas semestrales en tiempo real de publicaciones de TPs y TSPs directamente a tu bandeja de entrada.</li>
+                        </ul>
+                    </div>
+                    <p><b>¿Cómo evitarlo?</b> Simplemente ingresa a la plataforma del sistema e inscribe al menos una materia para este periodo. Al hacerlo, tu cuenta se reactivará automáticamente y volverás al estado Prime Seguro.</p>
+                </div>
+            </div>"
+        };
+
+        email.Body = builder.ToMessageBody();
+
+        // 🛡️ Aseguramos que los envíos masivos del CRM queden registrados en el contador diario
+        VerificarYRegistrarEnvio();
+
+        // 🚀 Despachamos usando el motor central OAuth2 sin parámetros extra superfluos
         await EnviarConGmailApiAsync(email);
     }
 }
