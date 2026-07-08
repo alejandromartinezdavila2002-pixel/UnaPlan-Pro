@@ -3,20 +3,26 @@ using Notion.Client;
 using UnaPlan.Infrastructure.Data;
 using System.Collections.Generic;
 using System.Linq;
+using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Hosting;
 using System;
 
 namespace UnaPlan.Infrastructure.Services;
 
-public class NotionPublisherService
+public class NotionPublisherService : BackgroundService
 {
     private readonly INotionClient _notionClient;
     private readonly IConfiguration _config;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<NotionPublisherService> _logger;
+
+    // Memoria para evitar publicaciones duplicadas el mismo lunes
+    private int _ultimoDiaRevisado = -1;
+    private bool _yaSePublicoEstaSemana = false;
 
     public NotionPublisherService(INotionClient notionClient, IConfiguration config, IServiceScopeFactory scopeFactory, ILogger<NotionPublisherService> logger)
     {
@@ -24,6 +30,55 @@ public class NotionPublisherService
         _config = config;
         _scopeFactory = scopeFactory;
         _logger = logger;
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("🤖 Motor Automático de Notion Activado (Patrullaje de Lunes).");
+
+        while (!stoppingToken.IsCancellationRequested)
+        {
+            try
+            {
+                var veTime = DateTime.UtcNow.AddHours(-4);
+
+                // 1. Reseteo semanal: Los domingos preparamos el sistema para el día siguiente
+                if (veTime.DayOfWeek == DayOfWeek.Sunday && veTime.Day != _ultimoDiaRevisado)
+                {
+                    _ultimoDiaRevisado = veTime.Day;
+                    _yaSePublicoEstaSemana = false;
+                    _logger.LogInformation("[Notion-Worker] 🔄 Reseteo dominical completado. Listo para publicar mañana.");
+                }
+
+                // 2. Ahorro de recursos extremo: Si no es Lunes, dormimos por 12 horas
+                if (veTime.DayOfWeek != DayOfWeek.Monday)
+                {
+                    await Task.Delay(TimeSpan.FromHours(12), stoppingToken);
+                    continue;
+                }
+
+                // 3. Ejecución del Lunes (A partir de las 6:00 AM)
+                if (veTime.DayOfWeek == DayOfWeek.Monday && veTime.Hour >= 6 && !_yaSePublicoEstaSemana)
+                {
+                    _logger.LogInformation("[Notion-Worker] 🚀 ¡Es Lunes! Iniciando sincronización automática de la cartelera...");
+
+                    // Disparamos la lógica interna de sincronización
+                    await SincronizarCarteleraAsync();
+
+                    _yaSePublicoEstaSemana = true;
+                    _ultimoDiaRevisado = veTime.Day;
+                    _logger.LogInformation("[Notion-Worker] ✅ Cartelera sincronizada. El motor se apaga hasta el próximo lunes.");
+                }
+
+                // Si es Lunes pero aún no son las 6:00 AM, verificamos cada hora (muy ligero)
+                await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "❌ Error crítico en el Motor Automático de Notion.");
+                await Task.Delay(TimeSpan.FromMinutes(10), stoppingToken);
+            }
+        }
     }
 
     public async Task SincronizarCarteleraAsync()

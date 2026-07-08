@@ -96,8 +96,7 @@ builder.Services.AddScoped<EmailService>();
 // Registra el trabajador en segundo plano
 builder.Services.AddHostedService<SupabaseKeepAliveService>();
 
-// Registra el NotionWorkerService para que se ejecute continuamente en segundo plano
-builder.Services.AddHostedService<NotionWorkerService>();
+// El NotionWorkerService ya no es necesario, su lógica ahora vive en NotionPublisherService
 
 
 
@@ -124,8 +123,10 @@ builder.Services.AddSingleton<Notion.Client.INotionClient>(sp =>
     });
 });
 
-// Luego registras tu servicio que usará este cliente
-builder.Services.AddScoped<NotionPublisherService>();
+// Registra el servicio de Notion como Singleton y HostedService para que funcione en segundo plano 
+// y además pueda ser inyectado en los endpoints.
+builder.Services.AddSingleton<NotionPublisherService>();
+builder.Services.AddHostedService(provider => provider.GetRequiredService<NotionPublisherService>());
 
 // ¡AQUÍ SE CONSTRUYE LA APP! (Ya no se pueden agregar más servicios al builder)
 var app = builder.Build();
