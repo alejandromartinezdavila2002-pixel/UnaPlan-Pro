@@ -19,6 +19,7 @@ public class TspMonitorWorkerService : BackgroundService
 
     // Memoria caché interna (Protege la base de datos y la CPU)
     private int _ultimoDiaRevisado = -1;
+    private bool _yaSeValidoHoy = false; // Bandera de estado para evitar el bug silencioso
     private bool _hayTspParaHoy = false;
     private List<string> _materiasTspEsperadas = new List<string>();
     private int _ultimoMinutoEscaneado = -1;
@@ -39,56 +40,63 @@ public class TspMonitorWorkerService : BackgroundService
             {
                 var veTime = DateTime.UtcNow.AddHours(-4);
 
-                // Resetear la memoria caché local a la medianoche
-                if (veTime.Day != _ultimoDiaRevisado && veTime.Hour == 0)
+                // 1. Reseteo universal de variables al cambiar de día (sin importar la hora)
+                if (veTime.Day != _ultimoDiaRevisado)
                 {
                     _ultimoDiaRevisado = veTime.Day;
+                    _yaSeValidoHoy = false;
                     _hayTspParaHoy = false;
                     _materiasTspEsperadas.Clear();
                     _ultimoMinutoEscaneado = -1;
                 }
 
-                // REGLA MAESTRA: SOLO SÁBADOS
-                if (veTime.DayOfWeek == DayOfWeek.Saturday)
+                // 2. Ahorro extremo de CPU en Render para días de semana
+                if (veTime.DayOfWeek != DayOfWeek.Saturday)
                 {
-                    // FASE 1: PRE-VALIDACIÓN (A partir de las 5:00 AM)
-                    if (veTime.Hour >= 5 && veTime.Day != _ultimoDiaRevisado)
+                    // Si no es sábado, dormimos el Worker por 1 hora entera
+                    await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
+                    continue; // Salta el resto del código y vuelve a empezar el bucle
+                }
+
+                // 3. FASE 1: PRE-VALIDACIÓN (A partir de las 5:00 AM usando la bandera booleana)
+                if (veTime.Hour >= 5 && !_yaSeValidoHoy)
+                {
+                    await ValidarTspProgramadosParaHoyAsync(veTime, stoppingToken);
+                    _yaSeValidoHoy = true;
+                }
+
+                // 4. FASE 2: BÚSQUEDA Y EXTRACCIÓN DINÁMICA
+                if (_hayTspParaHoy && veTime.Hour >= 6)
+                {
+                    // Límite de Cordura (Hard Stop): Las 14:00 (2:00 PM)
+                    if (veTime.Hour >= 14)
                     {
-                        await ValidarTspProgramadosParaHoyAsync(veTime, stoppingToken);
+                        _logger.LogWarning($"[TSP] ⚠️ Límite de las 2:00 PM alcanzado. La universidad no publicó los TSP de: {string.Join(", ", _materiasTspEsperadas)}. Abortando búsqueda.");
+                        _hayTspParaHoy = false;
+                        _materiasTspEsperadas.Clear();
                     }
-
-                    // FASE 2: BÚSQUEDA Y EXTRACCIÓN DINÁMICA
-                    if (_hayTspParaHoy && veTime.Hour >= 6)
+                    else
                     {
-                        // Límite de Cordura (Hard Stop): Las 14:00 (2:00 PM)
-                        if (veTime.Hour >= 14)
+                        // Escanear en minutos desfasados (05, 20, 35, 50)
+                        if ((veTime.Minute == 5 || veTime.Minute == 20 || veTime.Minute == 35 || veTime.Minute == 50)
+                            && veTime.Minute != _ultimoMinutoEscaneado)
                         {
-                            _logger.LogWarning($"[TSP] ⚠️ Límite de las 2:00 PM alcanzado. La universidad no publicó los TSP de: {string.Join(", ", _materiasTspEsperadas)}. Abortando búsqueda.");
-                            _hayTspParaHoy = false;
-                            _materiasTspEsperadas.Clear();
-                        }
-                        else
-                        {
-                            // Escanear en minutos desfasados (05, 20, 35, 50)
-                            if ((veTime.Minute == 5 || veTime.Minute == 20 || veTime.Minute == 35 || veTime.Minute == 50)
-                                && veTime.Minute != _ultimoMinutoEscaneado)
-                            {
-                                _ultimoMinutoEscaneado = veTime.Minute;
-                                _logger.LogInformation($"[TSP] Arrancando escáner Drive. Faltan {_materiasTspEsperadas.Count} TSPs por publicar...");
+                            _ultimoMinutoEscaneado = veTime.Minute;
+                            _logger.LogInformation($"[TSP] Arrancando escáner Drive. Faltan {_materiasTspEsperadas.Count} TSPs por publicar...");
 
-                                using var scope = _scopeFactory.CreateScope();
+                            using var scope = _scopeFactory.CreateScope();
 
-                                // Instanciamos el scraper real y le pasamos la fecha de hoy
-                                var scraper = scope.ServiceProvider.GetRequiredService<CatalogoScraperService>();
-                                await scraper.EscanearTspAsync(veTime.Date);
+                            // Instanciamos el scraper real y le pasamos la fecha de hoy
+                            var scraper = scope.ServiceProvider.GetRequiredService<CatalogoScraperService>();
+                            await scraper.EscanearTspAsync(veTime.Date);
 
-                                // Evaluamos qué se encontró para hacer el Cierre Prematuro si aplica
-                                await ActualizarMateriasFaltantesAsync(stoppingToken);
-                            }
+                            // Evaluamos qué se encontró para hacer el Cierre Prematuro si aplica
+                            await ActualizarMateriasFaltantesAsync(stoppingToken);
                         }
                     }
                 }
 
+                // Espera normal de 30 segundos durante los sábados
                 await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
             }
             catch (Exception ex)
@@ -124,6 +132,7 @@ public class TspMonitorWorkerService : BackgroundService
             _logger.LogInformation("[TSP] 💤 El calendario está vacío para hoy. El escáner Drive no se activará en todo el fin de semana.");
         }
 
+        // Ya no es estrictamente necesario, pero se mantiene por doble seguridad
         _ultimoDiaRevisado = veTime.Day;
     }
 

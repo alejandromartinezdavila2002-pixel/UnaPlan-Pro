@@ -17,6 +17,7 @@ public class TpMonitorWorkerService : BackgroundService
 
     private int _ultimoDiaRevisado = -1;
     private bool _hayTpsPendientes = false;
+    private bool _yaSeValidoHoy = false; // Bandera de estado para evitar el bug silencioso
     private int _ultimoMinutoEscaneado = -1;
 
     public TpMonitorWorkerService(ILogger<TpMonitorWorkerService> logger, IServiceScopeFactory scopeFactory)
@@ -27,7 +28,7 @@ public class TpMonitorWorkerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🟢 Micro-Worker TP Activado (Modo Sabatino: 6 AM - 9 AM).");
+        _logger.LogInformation("🟢 Micro-Worker TP Activado (Modo Sabatino: 6 AM - 2 PM).");
 
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -35,48 +36,57 @@ public class TpMonitorWorkerService : BackgroundService
             {
                 var veTime = DateTime.UtcNow.AddHours(-4);
 
-                if (veTime.Day != _ultimoDiaRevisado && veTime.Hour == 0)
+                // 1. Reseteo universal de variables al cambiar de día (sin importar la hora)
+                if (veTime.Day != _ultimoDiaRevisado)
                 {
                     _ultimoDiaRevisado = veTime.Day;
+                    _yaSeValidoHoy = false;
                     _hayTpsPendientes = false;
                     _ultimoMinutoEscaneado = -1;
                 }
 
-                if (veTime.DayOfWeek == DayOfWeek.Saturday)
+                // 2. Ahorro extremo de CPU en Render para días de semana
+                if (veTime.DayOfWeek != DayOfWeek.Saturday)
                 {
-                    // Fase 1: Pre-validación a partir de las 6:00 AM
-                    if (veTime.Hour >= 6 && veTime.Day != _ultimoDiaRevisado)
+                    // Si no es sábado, dormimos el Worker por 1 hora entera
+                    await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
+                    continue; // Salta el resto del código y vuelve a empezar el bucle
+                }
+
+                // 3. Fase 1: Pre-validación a partir de las 6:00 AM usando la bandera booleana
+                if (veTime.Hour >= 6 && !_yaSeValidoHoy)
+                {
+                    await ValidarTpsPendientesGlobalesAsync(stoppingToken);
+                    _yaSeValidoHoy = true;
+                }
+
+                // 4. Fase 2: Patrullaje de 06:00 AM a 02:00 PM
+                if (_hayTpsPendientes && veTime.Hour >= 6)
+                {
+                    // Límite de Cordura (Hard Stop): Las 14:00 (2:00 PM) unificado con el TSP
+                    if (veTime.Hour >= 14)
                     {
-                        await ValidarTpsPendientesGlobalesAsync(stoppingToken);
+                        _logger.LogWarning("[TP] ⚠️ Límite de las 2:00 PM alcanzado. Abortando búsqueda de TPs.");
+                        _hayTpsPendientes = false;
                     }
-
-                    // Fase 2: Patrullaje de 06:00 AM a 09:00 AM
-                    if (_hayTpsPendientes && veTime.Hour >= 6)
+                    else
                     {
-                        // Límite de Cordura (Hard Stop): Las 09:00 AM
-                        if (veTime.Hour >= 9)
+                        // Escanear en los minutos exactos (00, 15, 30, 45)
+                        if (veTime.Minute % 15 == 0 && veTime.Minute != _ultimoMinutoEscaneado)
                         {
-                            _logger.LogWarning("[TP] ⚠️ Límite de las 9:00 AM alcanzado. Abortando búsqueda de TPs.");
-                            _hayTpsPendientes = false;
-                        }
-                        else
-                        {
-                            // Escanear en los minutos exactos (00, 15, 30, 45)
-                            if (veTime.Minute % 15 == 0 && veTime.Minute != _ultimoMinutoEscaneado)
-                            {
-                                _ultimoMinutoEscaneado = veTime.Minute;
-                                _logger.LogInformation($"[TP] Escaneando a las {veTime:HH:mm}...");
+                            _ultimoMinutoEscaneado = veTime.Minute;
+                            _logger.LogInformation($"[TP] Escaneando a las {veTime:HH:mm}...");
 
-                                using var scope = _scopeFactory.CreateScope();
-                                var scraper = scope.ServiceProvider.GetRequiredService<CatalogoScraperService>();
+                            using var scope = _scopeFactory.CreateScope();
+                            var scraper = scope.ServiceProvider.GetRequiredService<CatalogoScraperService>();
 
-                                await scraper.EscanearTpPendientesAsync();
-                                await VerificarSiQuedanTpsPendientesAsync(stoppingToken);
-                            }
+                            await scraper.EscanearTpPendientesAsync();
+                            await VerificarSiQuedanTpsPendientesAsync(stoppingToken);
                         }
                     }
                 }
 
+                // Espera normal de 30 segundos durante los sábados
                 await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
             }
             catch (Exception ex)
@@ -100,13 +110,14 @@ public class TpMonitorWorkerService : BackgroundService
         if (cantidadPendientes > 0)
         {
             _hayTpsPendientes = true;
-            _logger.LogInformation($"[TP] ✅ Pendientes encontrados: {cantidadPendientes}. Patrullaje activo hasta las 9:00 AM.");
+            _logger.LogInformation($"[TP] ✅ Pendientes encontrados: {cantidadPendientes}. Patrullaje activo hasta las 2:00 PM.");
         }
         else
         {
             _hayTpsPendientes = false;
         }
 
+        // Actualizamos el día revisado por seguridad (aunque ya se hace arriba)
         _ultimoDiaRevisado = DateTime.UtcNow.AddHours(-4).Day;
     }
 

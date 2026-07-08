@@ -508,6 +508,7 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 
 
 
+
 app.MapPost("/api/notion/sync-cartelera", async (NotionPublisherService publisherService) =>
 {
     await publisherService.SincronizarCarteleraAsync();
