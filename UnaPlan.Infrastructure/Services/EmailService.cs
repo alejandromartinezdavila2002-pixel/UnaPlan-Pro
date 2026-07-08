@@ -4,6 +4,7 @@ using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.Gmail.v1;
 using Google.Apis.Services;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Logging;
 using MimeKit;
 using System;
 using System.Collections.Generic;
@@ -19,6 +20,7 @@ public class EmailService
 {
     private readonly IConfiguration _config;
     private readonly GmailService _gmailService;
+    private readonly ILogger<EmailService> _logger;
 
     // =========================================================================
     // 🛡️ MEMORIA DEL GUARDIÁN: Control de límite diario
@@ -27,10 +29,11 @@ public class EmailService
     private static DateTime _fechaUltimoEnvio = DateTime.Today;
     private const int LIMITE_DIARIO_SEGURO = 450; // Dejamos 50 de margen para el límite de 500 de Google
 
-    public EmailService(IConfiguration config, GmailService gmailService)
+    public EmailService(IConfiguration config, GmailService gmailService, ILogger<EmailService> logger)
     {
         _config = config;
         _gmailService = gmailService;
+        _logger = logger;
     }
 
     // =========================================================================
@@ -303,12 +306,12 @@ public class EmailService
             }
             catch (InvalidOperationException ex)
             {
-                Console.WriteLine($"\n[CRM] 🛑 GUARDIÁN ACTIVADO: {ex.Message}");
+                _logger.LogWarning($"\n[CRM] 🛑 GUARDIÁN ACTIVADO: {ex.Message}");
                 throw new InvalidOperationException($"Proceso masivo interrumpido. {ex.Message} (Enviados con éxito en este lote: {exitosos})");
             }
             catch (Exception ex) // ¡Atrapamos la excepción real para verla!
             {
-                Console.WriteLine($"❌ FALLÓ: {ex.Message}");
+                _logger.LogError(ex, $"❌ FALLÓ: {ex.Message}");
                 fallidos++;
             }
 

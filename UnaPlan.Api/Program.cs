@@ -5,6 +5,7 @@ using System.Net.NetworkInformation;
 using UnaPlan.Core.Entities;
 using UnaPlan.Infrastructure.Data;
 using UnaPlan.Infrastructure.Services;
+using UnaPlan.Infrastructure.Logging;
 
 using Google.Apis.Auth.OAuth2;
 using Google.Apis.Auth.OAuth2.Flows;
@@ -18,6 +19,15 @@ var builder = WebApplication.CreateBuilder(args);
 // ========================================================================
 // 1. CONFIGURACIONES Y SERVICIOS
 // ========================================================================
+
+// 🤖 Registro del Logger de Telegram
+builder.Logging.AddTelegramBot(options =>
+{
+    options.BotToken = builder.Configuration["Telegram:BotToken"] ?? "";
+    options.ChatId = builder.Configuration["Telegram:ChatId"] ?? "";
+    options.MinimumLevel = LogLevel.Warning; // (Recomendado: Warning para evitar Spam/Baneos de Telegram)
+});
+
 builder.Services.AddEndpointsApiExplorer();
 
 // Un SOLO bloque de Swagger, con tu HTML personalizado y antes del Build()
@@ -678,6 +688,13 @@ app.MapDelete("/api/admin/crm/purgar-fantasmas", async (AppDbContext db) =>
 .WithTags("6. Panel de Administración - CRM")
 .WithSummary("3. Purga total de usuarios fantasmas (Hard Delete)")
 .WithDescription("Elimina permanentemente de Supabase a todos aquellos estudiantes que ignoraron el ultimátum de 15 días y mantuvieron su cuenta sin actividad académica.");
+
+app.MapGet("/api/test-telegram", (ILogger<Program> logger) => 
+{
+    logger.LogWarning("🤖 Test: El Bot de Telegram de UnaPlan está vivo y reportando desde la base.");
+    logger.LogError("🔥 Test: Simulacro de error crítico de la base de datos.");
+    return Results.Ok("Logs de prueba enviados a Telegram. Revisa tu teléfono.");
+});
 
 app.Run();
 
