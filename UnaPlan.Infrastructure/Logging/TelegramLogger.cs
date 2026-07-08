@@ -25,9 +25,17 @@ public class TelegramLogger : ILogger
 
     public bool IsEnabled(LogLevel logLevel)
     {
-        return logLevel >= _options.MinimumLevel && 
-               !string.IsNullOrWhiteSpace(_options.BotToken) && 
-               !string.IsNullOrWhiteSpace(_options.ChatId);
+        if (logLevel < _options.MinimumLevel) return false;
+        if (string.IsNullOrWhiteSpace(_options.BotToken) || string.IsNullOrWhiteSpace(_options.ChatId)) return false;
+
+        // Filtro anti-spam: Silenciamos los Warnings ruidosos y comunes de las librerías internas de Microsoft.
+        // Solo nos interesan los Errores Reales de Microsoft, o los Warnings propios de nuestra App (UnaPlan).
+        if (logLevel == LogLevel.Warning && _categoryName.StartsWith("Microsoft.", StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return true;
     }
 
     public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception, Func<TState, Exception?, string> formatter)
