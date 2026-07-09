@@ -5,6 +5,9 @@ using System.Text.RegularExpressions;
 using UnaPlan.Core.Entities;
 using UnaPlan.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
+
+using Telegram.Bot;
+using Microsoft.Extensions.Configuration;
 using System.IO; // <--- AGREGAR ESTO PARA EL MEMORYSTREAM
 
 namespace UnaPlan.Infrastructure.Services;
@@ -113,9 +116,12 @@ public class CatalogoScraperService
             rutaCredenciales = "google-credentials.json";
         }
 
-        // Se usa FromJson porque FromStream está obsoleto por razones de seguridad en nuevas versiones de Google.Apis
-        credential = GoogleCredential.FromJson(File.ReadAllText(rutaCredenciales))
-            .CreateScoped(DriveService.Scope.DriveReadonly);
+        // Se usa FromJson. Se silencia la advertencia porque el JSON proviene de una ruta local segura controlada por nosotros, no de un usuario externo.
+        #pragma warning disable CS0618
+                credential = GoogleCredential.FromJson(File.ReadAllText(rutaCredenciales))
+                    .CreateScoped(DriveService.Scope.DriveReadonly);
+        #pragma warning restore CS0618
+
 
         return new DriveService(new BaseClientService.Initializer()
         {

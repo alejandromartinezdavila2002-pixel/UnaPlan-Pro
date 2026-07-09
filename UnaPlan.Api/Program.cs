@@ -13,6 +13,7 @@ using Google.Apis.Auth.OAuth2.Responses;
 using Google.Apis.Gmail.v1;
 using Google.Apis.Services;
 using Google.Apis.Util.Store;
+using Telegram.Bot;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -21,12 +22,20 @@ var builder = WebApplication.CreateBuilder(args);
 // ========================================================================
 builder.Services.AddMemoryCache();
 
-// 🤖 Registro del Logger de Telegram
+// Registro del Logger de Telegram
 builder.Logging.AddTelegramBot(options =>
 {
     options.BotToken = builder.Configuration["Telegram:BotToken"] ?? "";
-    options.ChatId = builder.Configuration["Telegram:ChatId"] ?? "";
-    options.MinimumLevel = LogLevel.Warning; // (Recomendado: Warning para evitar Spam/Baneos de Telegram)
+
+    // Extraemos la lista de administradores desde Secrets o Render
+    var admins = builder.Configuration.GetSection("Telegram:AdminChatIds").Get<List<long>>();
+    if (admins != null)
+    {
+        options.AdminChatIds = admins;
+    }
+
+    options.RenderUrl = builder.Configuration["Telegram:RenderUrl"] ?? "";
+    options.MinimumLevel = LogLevel.Warning;
 });
 
 builder.Services.AddEndpointsApiExplorer();
@@ -66,6 +75,9 @@ builder.Services.AddScoped<CatalogoScraperService>();
 
 // Agregamos el servicio de generación de Excel y envío de correos
 builder.Services.AddScoped<ExcelGeneratorService>();
+
+// Registramos el Cerebro de Telegram como Singleton
+builder.Services.AddSingleton<TelegramControlService>();
 
 // ========================================================================
 // 🛡️ REGISTRO ENTERPRISE: Google Gmail Service (Singleton)
@@ -698,72 +710,53 @@ app.MapGet("/api/test-telegram", (ILogger<Program> logger) =>
     return Results.Ok("Logs de prueba enviados a Telegram. Revisa tu teléfono.");
 });
 
+
+
+// Disparamos el mensaje de bienvenida de Telegram cuando la app termina de arrancar
+app.Lifetime.ApplicationStarted.Register(() =>
+{
+    var telegramControl = app.Services.GetRequiredService<TelegramControlService>();
+    _ = telegramControl.EnviarPanelDeControlAsync();
+});
+
 // ========================================================================
-// 5. WEBHOOK DE TELEGRAM (Botones Interactivos)
+// 🤖 WEBHOOK DE TELEGRAM
 // ========================================================================
 
-app.MapPost("/api/telegram/webhook", async (Microsoft.AspNetCore.Http.HttpContext context, Microsoft.Extensions.Caching.Memory.IMemoryCache cache, IConfiguration config) =>
+// 1. Endpoint que recibe los mensajes de los botones (Webhook)
+app.MapPost("/api/telegram/webhook", async (
+    [FromBody] Telegram.Bot.Types.Update update,
+    TelegramControlService telegramService) =>
 {
-    using var reader = new System.IO.StreamReader(context.Request.Body);
-    var body = await reader.ReadToEndAsync();
-    
-    try 
+    // Solo nos interesa cuando recibimos un mensaje de texto (el botón que presionaste)
+    if (update.Message != null && !string.IsNullOrEmpty(update.Message.Text))
     {
-        using var jsonDoc = System.Text.Json.JsonDocument.Parse(body);
-        var root = jsonDoc.RootElement;
-        
-        if (root.TryGetProperty("callback_query", out var callbackQuery))
-        {
-            string callbackId = callbackQuery.GetProperty("id").GetString()!;
-            string messageId = callbackQuery.GetProperty("message").GetProperty("message_id").GetRawText();
-            string dataGuid = callbackQuery.GetProperty("data").GetString()!;
-            string chatId = callbackQuery.GetProperty("message").GetProperty("chat").GetProperty("id").GetRawText();
-
-            string botToken = config["Telegram:BotToken"]!;
-            using var http = new System.Net.Http.HttpClient();
-
-            // Buscamos el detalle en caché
-            if (cache.TryGetValue(dataGuid, out object? detallesObj) && detallesObj is string detalles && !string.IsNullOrEmpty(detalles))
-            {
-                // Obtenemos el texto original (resumen)
-                string originalText = callbackQuery.GetProperty("message").GetProperty("text").GetString() ?? "Resumen";
-                
-                string nuevoTexto = $"{originalText}\n\n<b>Detalles Técnicos:</b>\n<pre><code class=\"language-text\">{System.Net.WebUtility.HtmlEncode(detalles)}</code></pre>";
-
-                // Editamos el mensaje original para añadir el detalle (y quitamos el botón)
-                var editPayload = new
-                {
-                    chat_id = chatId,
-                    message_id = long.Parse(messageId),
-                    text = nuevoTexto,
-                    parse_mode = "HTML"
-                };
-
-                await http.PostAsync($"https://api.telegram.org/bot{botToken}/editMessageText", 
-                    new System.Net.Http.StringContent(System.Text.Json.JsonSerializer.Serialize(editPayload), System.Text.Encoding.UTF8, "application/json"));
-            }
-            
-            // Siempre debemos responder al CallbackQuery para que el botón deje de cargar
-            var answerPayload = new { callback_query_id = callbackId };
-            await http.PostAsync($"https://api.telegram.org/bot{botToken}/answerCallbackQuery", 
-                    new System.Net.Http.StringContent(System.Text.Json.JsonSerializer.Serialize(answerPayload), System.Text.Encoding.UTF8, "application/json"));
-        }
+        await telegramService.ProcesarComandoTecladoAsync(
+            update.Message.Chat.Id,
+            update.Message.Text
+        );
     }
-    catch { /* Ignorar errores de webhook */ }
 
+    // Telegram SIEMPRE requiere un 200 OK para saber que recibimos el mensaje
     return Results.Ok();
-});
+})
+.ExcludeFromDescription(); // No lo mostramos en Swagger por seguridad
 
-app.MapGet("/api/telegram/register-webhook", async (string url, IConfiguration config) =>
+
+// 2. Endpoint para registrar la URL en Telegram (Solo se llama una vez)
+app.MapGet("/api/telegram/register-webhook", async (IConfiguration config) =>
 {
-    string botToken = config["Telegram:BotToken"]!;
-    string fullWebhookUrl = $"{url.TrimEnd('/')}/api/telegram/webhook";
-    
-    using var http = new System.Net.Http.HttpClient();
-    var response = await http.GetAsync($"https://api.telegram.org/bot{botToken}/setWebhook?url={fullWebhookUrl}");
-    
-    return Results.Ok(await response.Content.ReadAsStringAsync());
-});
+    var botToken = config["Telegram:BotToken"];
+    var renderUrl = config["Telegram:RenderUrl"];
+
+    var botClient = new Telegram.Bot.TelegramBotClient(botToken!);
+    var webhookUrl = $"{renderUrl}/api/telegram/webhook";
+
+    await botClient.SetWebhook(webhookUrl);
+
+    return Results.Ok($"Webhook registrado exitosamente en: {webhookUrl}");
+})
+.ExcludeFromDescription();
 
 app.Run();
 
