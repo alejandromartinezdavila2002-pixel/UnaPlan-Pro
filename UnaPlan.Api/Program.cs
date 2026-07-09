@@ -747,10 +747,14 @@ app.MapPost("/api/telegram/webhook", async (
 app.MapGet("/api/telegram/register-webhook", async (IConfiguration config) =>
 {
     var botToken = config["Telegram:BotToken"];
-    var renderUrl = config["Telegram:RenderUrl"];
+    // Forzamos que sea HTTPS sí o sí
+    var renderUrl = config["Telegram:RenderUrl"].Replace("http://", "https://");
 
     var botClient = new Telegram.Bot.TelegramBotClient(botToken!);
     var webhookUrl = $"{renderUrl}/api/telegram/webhook";
+
+    // Agregamos un log para ver qué está intentando registrar
+    Console.WriteLine($"Registrando Webhook en: {webhookUrl}");
 
     await botClient.SetWebhook(webhookUrl);
 
