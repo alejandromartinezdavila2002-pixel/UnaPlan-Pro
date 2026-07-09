@@ -10,7 +10,6 @@ using System.Linq;
 using System.Collections.Generic;
 using Microsoft.EntityFrameworkCore;
 
-// Importa tus namespaces reales aquí
 using UnaPlan.Core.Entities;
 using UnaPlan.Infrastructure.Data;
 

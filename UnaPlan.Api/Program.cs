@@ -106,7 +106,8 @@ builder.Services.AddScoped<EmailService>();
 // Registra el trabajador en segundo plano
 builder.Services.AddHostedService<SupabaseKeepAliveService>();
 
-// El NotionWorkerService ya no es necesario, su lógica ahora vive en NotionPublisherService
+// El NotionWorkerService 
+builder.Services.AddHostedService<NotionWorkerService>();
 
 
 
