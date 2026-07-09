@@ -743,12 +743,13 @@ app.MapPost("/api/telegram/webhook", async (
 .ExcludeFromDescription(); // No lo mostramos en Swagger por seguridad
 
 
+
 // 2. Endpoint para registrar la URL en Telegram (Solo se llama una vez)
 app.MapGet("/api/telegram/register-webhook", async (IConfiguration config) =>
 {
     var botToken = config["Telegram:BotToken"];
-    // Forzamos que sea HTTPS sí o sí
-    var renderUrl = config["Telegram:RenderUrl"].Replace("http://", "https://");
+    // Forzamos que sea HTTPS sí o sí. Usamos '?' para evitar la advertencia de nulo.
+    var renderUrl = config["Telegram:RenderUrl"]?.Replace("http://", "https://") ?? "";
 
     var botClient = new Telegram.Bot.TelegramBotClient(botToken!);
     var webhookUrl = $"{renderUrl}/api/telegram/webhook";
@@ -759,8 +760,7 @@ app.MapGet("/api/telegram/register-webhook", async (IConfiguration config) =>
     await botClient.SetWebhook(webhookUrl);
 
     return Results.Ok($"Webhook registrado exitosamente en: {webhookUrl}");
-})
-.ExcludeFromDescription();
+});
 
 app.Run();
 
