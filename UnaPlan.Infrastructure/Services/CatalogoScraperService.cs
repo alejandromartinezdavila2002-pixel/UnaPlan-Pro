@@ -113,11 +113,9 @@ public class CatalogoScraperService
             rutaCredenciales = "google-credentials.json";
         }
 
-        using (var stream = new FileStream(rutaCredenciales, FileMode.Open, FileAccess.Read))
-        {
-            credential = GoogleCredential.FromStream(stream)
-                .CreateScoped(DriveService.Scope.DriveReadonly);
-        }
+        // Se usa FromJson porque FromStream está obsoleto por razones de seguridad en nuevas versiones de Google.Apis
+        credential = GoogleCredential.FromJson(File.ReadAllText(rutaCredenciales))
+            .CreateScoped(DriveService.Scope.DriveReadonly);
 
         return new DriveService(new BaseClientService.Initializer()
         {

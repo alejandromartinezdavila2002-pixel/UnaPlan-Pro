@@ -4,6 +4,8 @@ using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Caching.Memory;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace UnaPlan.Infrastructure.Logging;
 
@@ -11,14 +13,16 @@ public class TelegramLogger : ILogger
 {
     private readonly string _categoryName;
     private readonly TelegramLoggerOptions _options;
+    private readonly System.IServiceProvider _serviceProvider;
     
     // Instancia estática para evitar el agotamiento de sockets (Socket Exhaustion)
     private static readonly HttpClient _httpClient = new HttpClient();
 
-    public TelegramLogger(string categoryName, TelegramLoggerOptions options)
+    public TelegramLogger(string categoryName, TelegramLoggerOptions options, System.IServiceProvider serviceProvider)
     {
         _categoryName = categoryName;
         _options = options;
+        _serviceProvider = serviceProvider;
     }
 
     public IDisposable? BeginScope<TState>(TState state) where TState : notnull => default!;
@@ -51,6 +55,27 @@ public class TelegramLogger : ILogger
             return;
         }
 
+        // Detección de mensajes tipo Batch (Resumen + Botón oculto)
+        bool isBatch = false;
+        string batchDetails = "";
+        string? callbackId = null;
+
+        if (eventId.Id == 999 && message.Contains("|BATCH_DETAILS|"))
+        {
+            isBatch = true;
+            var parts = message.Split("|BATCH_DETAILS|");
+            message = parts[0]; // Nos quedamos solo con el resumen
+            if (parts.Length > 1) 
+            {
+                batchDetails = parts[1];
+                callbackId = Guid.NewGuid().ToString("N");
+                
+                // Resolución "Lazy" (Diferida) para evitar la Dependencia Circular en el arranque
+                var memoryCache = _serviceProvider.GetService<IMemoryCache>();
+                memoryCache?.Set(callbackId, batchDetails, TimeSpan.FromHours(24));
+            }
+        }
+
         string emoji = logLevel switch
         {
             LogLevel.Critical => "🚨",
@@ -80,15 +105,29 @@ public class TelegramLogger : ILogger
 
         var telegramMessage = sb.ToString();
 
+        // Disparo (Fire and Forget) para no bloquear el hilo de ejecución síncrona de tu API
         _ = Task.Run(async () =>
         {
             try
             {
+                object? replyMarkup = null;
+                if (isBatch && callbackId != null)
+                {
+                    replyMarkup = new 
+                    {
+                        inline_keyboard = new[]
+                        {
+                            new[] { new { text = "🔍 Ver detalles técnicos", callback_data = callbackId } }
+                        }
+                    };
+                }
+
                 var payload = new
                 {
                     chat_id = _options.ChatId,
                     text = telegramMessage,
-                    parse_mode = "HTML"
+                    parse_mode = "HTML",
+                    reply_markup = replyMarkup
                 };
 
                 var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");

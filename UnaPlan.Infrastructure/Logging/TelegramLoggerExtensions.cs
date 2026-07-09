@@ -17,4 +17,10 @@ public static class TelegramLoggerExtensions
 
         return builder;
     }
+
+    public static void LogTelegramBatch(this ILogger logger, string summary, string details)
+    {
+        // Codificamos el mensaje con un prefijo para que el Logger lo intercepte
+        logger.LogWarning(new EventId(999, "TelegramBatch"), "{Summary}|BATCH_DETAILS|{Details}", summary, details);
+    }
 }

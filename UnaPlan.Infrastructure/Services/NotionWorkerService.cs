@@ -8,6 +8,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using System.Linq;
 using System.Collections.Generic;
+using System.Text;
 using Microsoft.EntityFrameworkCore;
 
 using UnaPlan.Core.Entities;
@@ -83,7 +84,12 @@ public class NotionWorkerService : BackgroundService
         var excelService = scope.ServiceProvider.GetRequiredService<ExcelGeneratorService>();
         var emailService = scope.ServiceProvider.GetRequiredService<EmailService>();
 
-        // 3. Procesamos cada fila encontrada
+        // 3. Variables para agrupar los resultados del lote (Batch Logging)
+        var batchDetails = new StringBuilder();
+        int procesadosConExito = 0;
+        int procesadosConError = 0;
+
+        // 4. Procesamos cada fila encontrada
         // 3. Procesamos cada fila encontrada
         foreach (var resultado in paginatedList.Results)
         {
@@ -98,7 +104,8 @@ public class NotionWorkerService : BackgroundService
                     string correo = ObtenerTextoDePropiedad(page.Properties, "Correo", false);
                     string codigosMaterias = ObtenerTextoDePropiedad(page.Properties, "Materias", false);
 
-                    _logger.LogInformation($"Procesando a: {nombre} ({correo}) - Materias: {codigosMaterias}");
+                    // Adiós log individual, ahora solo lo anotamos internamente
+                    // _logger.LogInformation($"Procesando a: {nombre} ({correo}) - Materias: {codigosMaterias}");
 
                     // ---LÓGICA DE PROGRAM.CS VIENE AQUÍ ---
                     char[] separadores = { ',', '.', ' ', '-', ';' };
@@ -188,17 +195,30 @@ public class NotionWorkerService : BackgroundService
 
 
                     await _notionClient.Pages.UpdatePropertiesAsync(page.Id, updateProps);
-                    _logger.LogInformation($"✅ Solicitud de {nombre} completada y actualizada en Notion.");
+                    
+                    batchDetails.AppendLine($"✅ {nombre} - Solicitud enviada.");
+                    procesadosConExito++;
 
                     await Task.Delay(400);
                 }
                 catch (Exception ex)
                 {
-                    _logger.LogError($"❌ Error procesando solicitud ID {page.Id}: {ex.Message}");
+                    batchDetails.AppendLine($"❌ Error en ID {page.Id}: {ex.Message}");
+                    procesadosConError++;
                 }
             }
         }
 
+        // --- ENVIAR LOTE A TELEGRAM SI HUBO ACTIVIDAD ---
+        if (procesadosConExito > 0 || procesadosConError > 0)
+        {
+            string summary = $"📋 {procesadosConExito} solicitudes procesadas en Notion. ({procesadosConError} errores)";
+            
+            // Usaremos reflexión/extensión para enviar el Batch.
+            // Para asegurar que compila incluso si la extensión no está disponible, usamos LogWarning con un patrón especial, 
+            // pero lo más limpio es llamar a la extensión que vamos a crear:
+            UnaPlan.Infrastructure.Logging.TelegramLoggerExtensions.LogTelegramBatch(_logger, summary, batchDetails.ToString());
+        }
     }
 
     // Método auxiliar para leer los diferentes tipos de celdas en Notion

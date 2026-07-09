@@ -19,6 +19,7 @@ var builder = WebApplication.CreateBuilder(args);
 // ========================================================================
 // 1. CONFIGURACIONES Y SERVICIOS
 // ========================================================================
+builder.Services.AddMemoryCache();
 
 // 🤖 Registro del Logger de Telegram
 builder.Logging.AddTelegramBot(options =>
@@ -693,8 +694,75 @@ app.MapDelete("/api/admin/crm/purgar-fantasmas", async (AppDbContext db) =>
 app.MapGet("/api/test-telegram", (ILogger<Program> logger) => 
 {
     logger.LogWarning("🤖 Test: El Bot de Telegram de UnaPlan está vivo y reportando desde la base.");
-    logger.LogError("🔥 Test: Simulacro de error crítico de la base de datos.");
+    UnaPlan.Infrastructure.Logging.TelegramLoggerExtensions.LogTelegramBatch(logger, "✅ 3 solicitudes de prueba procesadas", "✅ Juan completado\n❌ Pedro falló\n✅ Maria completado");
     return Results.Ok("Logs de prueba enviados a Telegram. Revisa tu teléfono.");
+});
+
+// ========================================================================
+// 5. WEBHOOK DE TELEGRAM (Botones Interactivos)
+// ========================================================================
+
+app.MapPost("/api/telegram/webhook", async (Microsoft.AspNetCore.Http.HttpContext context, Microsoft.Extensions.Caching.Memory.IMemoryCache cache, IConfiguration config) =>
+{
+    using var reader = new System.IO.StreamReader(context.Request.Body);
+    var body = await reader.ReadToEndAsync();
+    
+    try 
+    {
+        using var jsonDoc = System.Text.Json.JsonDocument.Parse(body);
+        var root = jsonDoc.RootElement;
+        
+        if (root.TryGetProperty("callback_query", out var callbackQuery))
+        {
+            string callbackId = callbackQuery.GetProperty("id").GetString()!;
+            string messageId = callbackQuery.GetProperty("message").GetProperty("message_id").GetRawText();
+            string dataGuid = callbackQuery.GetProperty("data").GetString()!;
+            string chatId = callbackQuery.GetProperty("message").GetProperty("chat").GetProperty("id").GetRawText();
+
+            string botToken = config["Telegram:BotToken"]!;
+            using var http = new System.Net.Http.HttpClient();
+
+            // Buscamos el detalle en caché
+            if (cache.TryGetValue(dataGuid, out object? detallesObj) && detallesObj is string detalles && !string.IsNullOrEmpty(detalles))
+            {
+                // Obtenemos el texto original (resumen)
+                string originalText = callbackQuery.GetProperty("message").GetProperty("text").GetString() ?? "Resumen";
+                
+                string nuevoTexto = $"{originalText}\n\n<b>Detalles Técnicos:</b>\n<pre><code class=\"language-text\">{System.Net.WebUtility.HtmlEncode(detalles)}</code></pre>";
+
+                // Editamos el mensaje original para añadir el detalle (y quitamos el botón)
+                var editPayload = new
+                {
+                    chat_id = chatId,
+                    message_id = long.Parse(messageId),
+                    text = nuevoTexto,
+                    parse_mode = "HTML"
+                };
+
+                await http.PostAsync($"https://api.telegram.org/bot{botToken}/editMessageText", 
+                    new System.Net.Http.StringContent(System.Text.Json.JsonSerializer.Serialize(editPayload), System.Text.Encoding.UTF8, "application/json"));
+            }
+            
+            // Siempre debemos responder al CallbackQuery para que el botón deje de cargar
+            var answerPayload = new { callback_query_id = callbackId };
+            await http.PostAsync($"https://api.telegram.org/bot{botToken}/answerCallbackQuery", 
+                    new System.Net.Http.StringContent(System.Text.Json.JsonSerializer.Serialize(answerPayload), System.Text.Encoding.UTF8, "application/json"));
+        }
+    }
+    catch { /* Ignorar errores de webhook */ }
+
+    return Results.Ok();
+});
+
+app.MapGet("/api/telegram/register-webhook", async (string url, IConfiguration config) =>
+{
+    string botToken = config["Telegram:BotToken"]!;
+    string fullWebhookUrl = $"{url.TrimEnd('/')}/api/telegram/webhook";
+    
+    using var http = new System.Net.Http.HttpClient();
+    var response = await http.GetAsync($"https://api.telegram.org/bot{botToken}/setWebhook?url={fullWebhookUrl}");
+    
+    return Results.Ok(await response.Content.ReadAsStringAsync());
 });
 
 app.Run();
