@@ -131,7 +131,7 @@ public class NotionPublisherService : BackgroundService
                     { "Materia", new TitlePropertyValue { Title = new List<RichTextBase> { new RichTextText { Text = new Text { Content = materiaNombre } } } } },
                     { "Código", new RichTextPropertyValue { RichText = new List<RichTextBase> { new RichTextText { Text = new Text { Content = codigoMateria } } } } },
                     { "Tipo", new SelectPropertyValue { Select = new SelectOption { Name = tipoEvaluacion } } },
-                    { "Fecha de Entrega o Publicació", new DatePropertyValue { Date = new Date { Start = fechaAMostrar.Date.AddHours(12) } } },
+                    { "Fecha de Entrega o Publicación", new DatePropertyValue { Date = new Date { Start = fechaAMostrar.Date.AddHours(12) } } },
                     { "Semana", new NumberPropertyValue { Number = eval.Semana ?? 0 } }
                 };
 
