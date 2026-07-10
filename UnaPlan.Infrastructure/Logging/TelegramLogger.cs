@@ -119,7 +119,9 @@ public class TelegramLogger : ILogger
         var dispatcher = _serviceProvider.GetService<TelegramLogDispatcher>();
         if (dispatcher != null)
         {
-            dispatcher.EnqueueLog(telegramMessage, replyMarkup);
+            // Los logs que llegan a TelegramLogger ya están filtrados (son Errores, Warnings o Batches importantes).
+            // Por lo tanto, SIEMPRE los enviamos, ignorando si el Modo En Vivo está apagado.
+            dispatcher.EnqueueLog(telegramMessage, replyMarkup, bypassLiveMode: true);
         }
         else
         {

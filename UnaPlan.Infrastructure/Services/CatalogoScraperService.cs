@@ -16,15 +16,16 @@ public class CatalogoScraperService
 {
 
 
-    // 1. Declaramos la variable de la base de datos
     private readonly AppDbContext _db;
-    private readonly EmailService _emailService; // NUEVO
+    private readonly EmailService _emailService;
+    private readonly Microsoft.Extensions.Logging.ILogger<CatalogoScraperService> _logger;
 
     // 2. El Constructor: Aquí es donde la API le "inyecta" la conexión al servicio
-    public CatalogoScraperService(AppDbContext db, EmailService emailService)
+    public CatalogoScraperService(AppDbContext db, EmailService emailService, Microsoft.Extensions.Logging.ILogger<CatalogoScraperService> logger)
     {
         _db = db;
         _emailService = emailService;
+        _logger = logger;
     }
 
 
@@ -344,6 +345,10 @@ public class CatalogoScraperService
 
         if (!tspHoy.Any()) return;
 
+        int procesadosConExito = 0;
+        int alertasEnviadas = 0;
+        var batchDetails = new System.Text.StringBuilder();
+
         foreach (var eval in tspHoy)
         {
             if (string.IsNullOrEmpty(eval.CodigoMateria)) continue;
@@ -436,6 +441,7 @@ public class CatalogoScraperService
                                 archivoDrive.WebViewLink
                             );
                             await Task.Delay(500); // Freno para no saturar Gmail
+                            alertasEnviadas++;
                         }
                         catch (Exception ex)
                         {
@@ -444,7 +450,15 @@ public class CatalogoScraperService
                     }
                 }
 
+                procesadosConExito++;
+                batchDetails.AppendLine($"✅ {eval.CodigoMateria} (Alertas: {estudiantesInteresados.Count})");
             }
+        }
+
+        if (procesadosConExito > 0)
+        {
+            string summary = $"📋 {procesadosConExito} nuevos TSP encontrados en Drive. ({alertasEnviadas} alertas enviadas).";
+            UnaPlan.Infrastructure.Logging.TelegramLoggerExtensions.LogTelegramBatch(_logger, summary, batchDetails.ToString());
         }
     }
 
@@ -462,6 +476,10 @@ public class CatalogoScraperService
             .ToListAsync();
 
         if (!tpPendientes.Any()) return; // Si ya encontramos todos los TPs del semestre, no hacemos nada
+
+        int procesadosConExito = 0;
+        int alertasEnviadas = 0;
+        var batchDetails = new System.Text.StringBuilder();
 
         foreach (var eval in tpPendientes)
         {
@@ -521,6 +539,7 @@ public class CatalogoScraperService
                                 archivoDrive.WebViewLink
                             );
                             await Task.Delay(500); // Freno para no saturar Gmail
+                            alertasEnviadas++;
                         }
                         catch (Exception ex)
                         {
@@ -528,10 +547,17 @@ public class CatalogoScraperService
                         }
                     }
                 }
+
+                procesadosConExito++;
+                batchDetails.AppendLine($"✅ {eval.CodigoMateria} (Alertas: {estudiantesInteresados.Count})");
             }
         }
+
+        if (procesadosConExito > 0)
+        {
+            string summary = $"📋 {procesadosConExito} nuevos TP encontrados en Drive. ({alertasEnviadas} alertas enviadas).";
+            UnaPlan.Infrastructure.Logging.TelegramLoggerExtensions.LogTelegramBatch(_logger, summary, batchDetails.ToString());
+        }
     }
-
-
 
 }

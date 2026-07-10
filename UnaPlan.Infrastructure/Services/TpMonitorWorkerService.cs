@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using UnaPlan.Infrastructure.Data;
 using System;
 using System.Linq;
@@ -28,7 +28,16 @@ public class TpMonitorWorkerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🟢 Micro-Worker TP Activado (Modo Sabatino: 6 AM - 2 PM).");
+        var startVeTime = DateTime.UtcNow.AddHours(-4);
+        if (startVeTime.DayOfWeek == DayOfWeek.Saturday)
+        {
+            // 🔥 PRUEBA: Usamos LogWarning temporalmente para forzar que este mensaje llegue a tu Telegram sí o sí
+            _logger.LogWarning("🟢 Micro-Worker TP Activado (Modo Sabatino: 6 AM - 2 PM).");
+        }
+        else
+        {
+            _logger.LogInformation($"💤 Micro-Worker TP Iniciado en {startVeTime.DayOfWeek}. Hibernando hasta el sábado...");
+        }
 
         while (!stoppingToken.IsCancellationRequested)
         {

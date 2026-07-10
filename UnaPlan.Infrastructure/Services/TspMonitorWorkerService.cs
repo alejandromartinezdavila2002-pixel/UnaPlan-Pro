@@ -1,4 +1,4 @@
-﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore;
 using UnaPlan.Infrastructure.Data;
 using UnaPlan.Core.Entities;
 using System;
@@ -32,7 +32,16 @@ public class TspMonitorWorkerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🕵️‍♂️ Vigilante de TSP Activado (Modo Sabatino Inteligente).");
+        var startVeTime = DateTime.UtcNow.AddHours(-4);
+        if (startVeTime.DayOfWeek == DayOfWeek.Saturday)
+        {
+            // 🔥 PRUEBA: Usamos LogWarning temporalmente para forzar que este mensaje llegue a tu Telegram sí o sí
+            _logger.LogWarning("🕵️‍♂️ Vigilante de TSP Activado (Modo Sabatino Inteligente).");
+        }
+        else
+        {
+            _logger.LogInformation($"💤 Vigilante de TSP Iniciado en {startVeTime.DayOfWeek}. Hibernando hasta el sábado...");
+        }
 
         while (!stoppingToken.IsCancellationRequested)
         {

@@ -43,10 +43,10 @@ public class TelegramLogDispatcher : BackgroundService
     }
 
     // Método para que el NotionWorkerService llame y encole el log
-    public void EnqueueLog(string message, Telegram.Bot.Types.ReplyMarkups.ReplyMarkup? replyMarkup = null)
+    public void EnqueueLog(string message, Telegram.Bot.Types.ReplyMarkups.ReplyMarkup? replyMarkup = null, bool bypassLiveMode = false)
     {
-        // Solo encolamos si el interruptor en Telegram está encendido
-        if (_controlService.ModoEnVivoActivado)
+        // Solo encolamos si es un mensaje crítico/forzado (bypass) o si el interruptor en Telegram está encendido
+        if (bypassLiveMode || _controlService.ModoEnVivoActivado)
         {
             _logQueue.Writer.TryWrite(new TelegramLogMessage(message, replyMarkup));
         }
