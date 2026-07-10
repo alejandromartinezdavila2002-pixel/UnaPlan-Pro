@@ -105,8 +105,12 @@ public class NotionWorkerService : BackgroundService
             {
                 try
                 {
+                    // 🔥 DIAGNÓSTICO: Imprimir TODAS las columnas que vienen de Notion para ver por qué falla "Nombre"
+                    var todasLasColumnas = string.Join(", ", page.Properties.Select(p => $"{p.Key} ({p.Value.GetType().Name})"));
+                    _logger.LogInformation($"[DIAGNÓSTICO NOTION] Columnas detectadas: {todasLasColumnas}");
+
                     // 2. Extraer los datos de la fila de Notion de forma robusta
-                    string nombre = ObtenerTextoDePropiedad(page.Properties, "Nombre");
+                    string nombre = ObtenerTextoDePropiedad(page.Properties, "Nombre Completo");
                     string correo = ObtenerTextoDePropiedad(page.Properties, "Correo");
                     string materiasRaw = ObtenerTextoDePropiedad(page.Properties, "Materias");
 
