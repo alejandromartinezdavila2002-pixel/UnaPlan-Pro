@@ -105,10 +105,10 @@ public class NotionWorkerService : BackgroundService
             {
                 try
                 {
-                    // 2. Extraer los datos de la fila de Notion usando nuestro método auxiliar
-                    string nombre = ObtenerTextoDePropiedad(page.Properties, "Nombre", esTitulo: true);
-                    string correo = ObtenerTextoDePropiedad(page.Properties, "Correo", esTitulo: false);
-                    string materiasRaw = ObtenerTextoDePropiedad(page.Properties, "Materias", esTitulo: false);
+                    // 2. Extraer los datos de la fila de Notion de forma robusta
+                    string nombre = ObtenerTextoDePropiedad(page.Properties, "Nombre");
+                    string correo = ObtenerTextoDePropiedad(page.Properties, "Correo");
+                    string materiasRaw = ObtenerTextoDePropiedad(page.Properties, "Materias");
 
                     _logger.LogInformation($"Procesando a: {nombre} ({correo}) - Materias: {materiasRaw}");
 
@@ -241,18 +241,20 @@ public class NotionWorkerService : BackgroundService
         }
     }
 
-    // Método auxiliar para leer los diferentes tipos de celdas en Notion
-    private string ObtenerTextoDePropiedad(IDictionary<string, PropertyValue> propiedades, string nombreColumna, bool esTitulo)
+    // Método auxiliar para leer los diferentes tipos de celdas en Notion de forma automática
+    private string ObtenerTextoDePropiedad(IDictionary<string, PropertyValue> propiedades, string nombreColumna)
     {
-        if (!propiedades.ContainsKey(nombreColumna)) return "";
+        // Revisamos si la columna existe (ignorando mayúsculas/minúsculas o espacios extra por seguridad)
+        var key = propiedades.Keys.FirstOrDefault(k => k.Trim().Equals(nombreColumna, StringComparison.OrdinalIgnoreCase));
+        if (key == null) return "";
 
-        var prop = propiedades[nombreColumna];
+        var prop = propiedades[key];
 
-        if (esTitulo && prop is TitlePropertyValue titulo)
-            return titulo.Title.FirstOrDefault()?.PlainText ?? "";
+        if (prop is TitlePropertyValue titulo && titulo.Title != null)
+            return string.Join("", titulo.Title.Select(t => t.PlainText));
 
-        if (prop is RichTextPropertyValue textoRico)
-            return textoRico.RichText.FirstOrDefault()?.PlainText ?? "";
+        if (prop is RichTextPropertyValue textoRico && textoRico.RichText != null)
+            return string.Join("", textoRico.RichText.Select(t => t.PlainText));
 
         if (prop is EmailPropertyValue email)
             return email.Email ?? "";
