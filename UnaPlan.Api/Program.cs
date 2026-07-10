@@ -150,6 +150,7 @@ builder.Services.AddSingleton<Notion.Client.INotionClient>(sp =>
 // Registra el servicio de Notion como Singleton y HostedService para que funcione en segundo plano 
 // y además pueda ser inyectado en los endpoints.
 builder.Services.AddSingleton<NotionPublisherService>();
+
 builder.Services.AddHostedService(provider => provider.GetRequiredService<NotionPublisherService>());
 
 // Registramos el Dispatcher (Singleton para la cola, HostedService para el bucle)
