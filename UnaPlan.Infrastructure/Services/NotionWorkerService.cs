@@ -24,14 +24,19 @@ public class NotionWorkerService : BackgroundService
     private readonly INotionClient _notionClient;
     private readonly string _databaseId;
 
+    // 🤖 NUEVO: Inyectamos el Dispatcher que maneja la cola Anti-Spam de Telegram
+    private readonly TelegramLogDispatcher _logDispatcher;
+
     public NotionWorkerService(
         ILogger<NotionWorkerService> logger,
         IConfiguration config,
-        IServiceScopeFactory scopeFactory)
+        IServiceScopeFactory scopeFactory,
+        TelegramLogDispatcher logDispatcher) // ⬅️ Agregado al constructor
     {
         _logger = logger;
         _config = config;
         _scopeFactory = scopeFactory;
+        _logDispatcher = logDispatcher; // ⬅️ Guardamos la referencia
 
         // Inicializamos el cliente de Notion con el Token secreto
         _notionClient = NotionClientFactory.Create(new ClientOptions
@@ -43,147 +48,165 @@ public class NotionWorkerService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🚀 Notion Worker Iniciado y vigilando la tabla...");
+        _logger.LogInformation("🕵️‍♂️ Vigilante de Notion Activado (Escaneando base de datos del CRM)...");
 
-        // Este es el ciclo infinito que reemplaza a Make.com
         while (!stoppingToken.IsCancellationRequested)
         {
             try
             {
-                await ProcesarSolicitudesPendientesAsync();
+                using (var scope = _scopeFactory.CreateScope())
+                {
+                    var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
+                    await ProcesarSolicitudesPendientesAsync(db);
+                }
             }
             catch (Exception ex)
             {
-                _logger.LogError($"Error en el ciclo del Worker: {ex.Message}");
+                _logger.LogError($"❌ Error en el ciclo del Worker de Notion: {ex.Message}");
             }
 
-            // El Worker "duerme" por 30 segundos antes de volver a preguntar a Notion
+            // El vigilante descansa 30 segundos antes de volver a escanear Notion
             await Task.Delay(TimeSpan.FromSeconds(30), stoppingToken);
         }
     }
 
-    private async Task ProcesarSolicitudesPendientesAsync()
+    private async Task ProcesarSolicitudesPendientesAsync(AppDbContext db)
     {
-        // 1. Preguntamos a Notion: "¿Hay alguien con Estado = Pendiente?"
-        // Buscamos todas las filas donde la columna "Estado" esté VACÍA
+        // 1. Consultar a Notion por filas que tengan Estado == "Pendiente"
         var queryParams = new DatabasesQueryParameters
         {
-            Filter = new SelectFilter("Estado", isEmpty: true)
+            Filter = new CompoundFilter(
+                and: new List<Filter>
+                {
+                    new SelectFilter("Estado", equal: "Pendiente")
+                }
+            )
         };
 
-        var paginatedList = await _notionClient.Databases.QueryAsync(_databaseId, queryParams);
+        var response = await _notionClient.Databases.QueryAsync(_databaseId, queryParams);
 
-        if (!paginatedList.Results.Any())
-            return; // Si no hay nadie, terminamos y vuelve a dormir
+        if (response.Results.Count == 0)
+        {
+            return; // No hay trabajo, salimos pacíficamente
+        }
 
-        _logger.LogInformation($"📥 Se encontraron {paginatedList.Results.Count} solicitudes nuevas.");
+        _logger.LogInformation($"📥 Se encontraron {response.Results.Count} solicitudes nuevas.");
 
-        // 2. Creamos un Scope (Un espacio de trabajo temporal para inyectar servicios)
-        using var scope = _scopeFactory.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-        var excelService = scope.ServiceProvider.GetRequiredService<ExcelGeneratorService>();
-        var emailService = scope.ServiceProvider.GetRequiredService<EmailService>();
-
-        // 3. Variables para agrupar los resultados del lote (Batch Logging)
-        var batchDetails = new StringBuilder();
         int procesadosConExito = 0;
         int procesadosConError = 0;
+        StringBuilder batchDetails = new StringBuilder();
 
-        // 4. Procesamos cada fila encontrada
-        // 3. Procesamos cada fila encontrada
-        foreach (var resultado in paginatedList.Results)
+        using (var scope = _scopeFactory.CreateScope())
         {
-            // MAGIA DE ARQUITECTO: Casteo seguro (Pattern Matching)
-            // Obligamos a C# a tratar el objeto estrictamente como una página de Notion
-            if (resultado is Notion.Client.Page page)
+            var emailService = scope.ServiceProvider.GetRequiredService<EmailService>();
+            var excelService = scope.ServiceProvider.GetRequiredService<ExcelGeneratorService>();
+
+            foreach (var page in response.Results.OfType<Page>())
             {
                 try
                 {
-                    // ¡Adiós al error de Properties! Ahora 'page' tiene acceso total a sus propiedades
-                    string nombre = ObtenerTextoDePropiedad(page.Properties, "Nombre Completo", true);
-                    string correo = ObtenerTextoDePropiedad(page.Properties, "Correo", false);
-                    string codigosMaterias = ObtenerTextoDePropiedad(page.Properties, "Materias", false);
+                    // 2. Extraer los datos de la fila de Notion usando nuestro método auxiliar
+                    string nombre = ObtenerTextoDePropiedad(page.Properties, "Nombre", esTitulo: true);
+                    string correo = ObtenerTextoDePropiedad(page.Properties, "Correo", esTitulo: false);
+                    string materiasRaw = ObtenerTextoDePropiedad(page.Properties, "Materias", esTitulo: false);
 
-                    // Adiós log individual, ahora solo lo anotamos internamente
-                    // _logger.LogInformation($"Procesando a: {nombre} ({correo}) - Materias: {codigosMaterias}");
+                    _logger.LogInformation($"Procesando a: {nombre} ({correo}) - Materias: {materiasRaw}");
 
-                    // ---LÓGICA DE PROGRAM.CS VIENE AQUÍ ---
-                    char[] separadores = { ',', '.', ' ', '-', ';' };
-                    List<string> listaMaterias = codigosMaterias
-                        .Split(separadores, StringSplitOptions.RemoveEmptyEntries)
+                    if (string.IsNullOrEmpty(correo) || string.IsNullOrEmpty(materiasRaw))
+                    {
+                        throw new Exception("El correo o las materias están vacías en Notion.");
+                    }
+
+                    // 3. Procesar las materias (separadas por coma o espacio)
+                    var listaMaterias = materiasRaw
+                        .Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
                         .Select(m => m.Trim())
-                        .Distinct()
                         .ToList();
 
-                    var materiasBd = await db.PlanesDeCurso
-                     .Include(p => p.MaterialesDeApoyo)
-                     .Include(p => p.Evaluaciones)
-                     .Where(p => listaMaterias.Contains(p.CodigoMateria))
-                     .AsSplitQuery() 
-                     .ToListAsync();
+                    // 4. Buscar en la Base de Datos los planes, materiales y evaluaciones de esas materias
+                    var planes = await db.PlanesDeCurso
+                        .Where(p => listaMaterias.Contains(p.CodigoMateria))
+                        .ToListAsync();
 
-                    var codigosEncontrados = materiasBd.Select(m => m.CodigoMateria).ToList();
-                    List<string> materiasNoEncontradas = listaMaterias.Except(codigosEncontrados).ToList();
+                    var materiales = await db.MaterialesDeApoyo
+                        .Where(m => listaMaterias.Contains(m.CodigoMateria))
+                        .ToListAsync();
 
-                    var listaParaExcel = new List<ExcelGeneratorService.MateriaPlanillaDto>();
+                    var evaluaciones = await db.Evaluaciones
+                        .Where(e => listaMaterias.Contains(e.CodigoMateria))
+                        .ToListAsync();
 
-                    foreach (var materia in materiasBd)
+                    // 5. Mapear datos para el Excel
+                    var materiasParaExcel = new List<ExcelGeneratorService.MateriaPlanillaDto>();
+                    var materiasEncontradas = planes.Select(p => p.CodigoMateria).Distinct().ToList();
+                    var materiasFaltantes = listaMaterias.Except(materiasEncontradas).ToList();
+
+                    foreach (var materia in listaMaterias)
                     {
-                        if (materia.Evaluaciones != null && materia.Evaluaciones.Any())
+                        var plan = planes.FirstOrDefault(p => p.CodigoMateria == materia);
+                        var mats = materiales.Where(m => m.CodigoMateria == materia).Select(m => m.UrlDrive).ToList();
+                        var evals = evaluaciones.Where(e => e.CodigoMateria == materia).ToList();
+                        
+                        if (evals.Any())
                         {
-                            foreach (var eval in materia.Evaluaciones)
+                            foreach (var eval in evals)
                             {
-                                listaParaExcel.Add(new ExcelGeneratorService.MateriaPlanillaDto
+                                materiasParaExcel.Add(new ExcelGeneratorService.MateriaPlanillaDto
                                 {
-                                    Codigo = materia.CodigoMateria,
-                                    Nombre = eval.NombreMateria,
+                                    Codigo = materia,
+                                    Nombre = plan?.NombreMateria ?? "Sin nombre",
                                     TipoEvaluacion = eval.Tipo,
                                     FechaEntrega = eval.FechaEntrega.ToString("dd/MM/yyyy"),
-                                    UrlPlan = materia.UrlDocumento,
-                                    UrlsMateriales = materia.MaterialesDeApoyo.Select(m => m.UrlDrive).ToList()
+                                    UrlPlan = plan?.UrlDocumento ?? "",
+                                    UrlsMateriales = mats
                                 });
                             }
                         }
-                        else
+                        else if (plan != null)
                         {
-                            listaParaExcel.Add(new ExcelGeneratorService.MateriaPlanillaDto
+                            // Si hay plan pero no hay evaluaciones cargadas en BD, al menos enviamos la fila con el plan
+                            materiasParaExcel.Add(new ExcelGeneratorService.MateriaPlanillaDto
                             {
-                                Codigo = materia.CodigoMateria,
-                                Nombre = materia.NombreMateria,
-                                TipoEvaluacion = "Pendiente por definir",
+                                Codigo = materia,
+                                Nombre = plan.NombreMateria,
+                                TipoEvaluacion = "Sin especificar",
                                 FechaEntrega = "Pendiente",
-                                UrlPlan = materia.UrlDocumento,
-                                UrlsMateriales = materia.MaterialesDeApoyo.Select(m => m.UrlDrive).ToList()
+                                UrlPlan = plan.UrlDocumento ?? "",
+                                UrlsMateriales = mats
                             });
                         }
                     }
 
-                    // Generamos y Enviamos
-                    var archivoExcelBytes = excelService.GenerarPlanDeEvaluacionExcel(listaParaExcel);
-                    await emailService.EnviarPlanPersonalizadoAsync(correo, nombre, archivoExcelBytes, materiasNoEncontradas);
+                    // 6. Generar el archivo Excel en memoria RAM
+                    byte[] excelBytes = excelService.GenerarPlanDeEvaluacionExcel(materiasParaExcel);
 
-                    // NUEVO: GUARDAR AL ESTUDIANTE PARA ALERTAS FUTURAS (Módulo 5)
-                    var estudianteDb = await db.EstudiantesSuscritos.FirstOrDefaultAsync(e => e.Correo == correo);
+                    // 7. Despachar el Correo Electrónico (El EmailService maneja internamente el asunto y cuerpo)
+                    await emailService.EnviarPlanPersonalizadoAsync(correo, nombre, excelBytes, materiasFaltantes);
 
-                    if (estudianteDb == null)
+                    // 7. Guardar o actualizar al estudiante en nuestra tabla "EstudiantesSuscritos" de Supabase
+                    var estudianteExistente = await db.EstudiantesSuscritos
+                        .FirstOrDefaultAsync(e => e.Correo == correo);
+
+                    if (estudianteExistente != null)
                     {
-                        // Es un estudiante nuevo, lo registramos con sus materias
-                        db.EstudiantesSuscritos.Add(new EstudiantesSuscritos
+                        estudianteExistente.Nombre = nombre;
+                        estudianteExistente.MateriasInscritas = listaMaterias;
+                        estudianteExistente.FechaSuscripcion = DateTime.UtcNow;
+                        db.EstudiantesSuscritos.Update(estudianteExistente);
+                    }
+                    else
+                    {
+                        var nuevoEstudiante = new EstudiantesSuscritos
                         {
                             Nombre = nombre,
                             Correo = correo,
                             MateriasInscritas = listaMaterias,
                             FechaSuscripcion = DateTime.UtcNow
-                        });
+                        };
+                        await db.EstudiantesSuscritos.AddAsync(nuevoEstudiante);
                     }
-                    else
-                    {
-                        // Si ya existía, unimos las materias nuevas con las que ya tenía (evitando duplicados)
-                        estudianteDb.MateriasInscritas = estudianteDb.MateriasInscritas.Union(listaMaterias).ToList();
-                        db.EstudiantesSuscritos.Update(estudianteDb);
-                    }
+
                     await db.SaveChangesAsync();
-                    // =======================================================================
 
                     // --- CIERRE DEL CICLO: Actualizamos el Estado en Notion a "Enviado" ---
                     var updateProps = new Dictionary<string, PropertyValue>
@@ -191,18 +214,19 @@ public class NotionWorkerService : BackgroundService
                         { "Estado", new SelectPropertyValue { Select = new SelectOption { Name = "Enviado" } } }
                     };
 
-
-
-
                     await _notionClient.Pages.UpdatePropertiesAsync(page.Id, updateProps);
-                    
+                    _logger.LogInformation($"✅ Solicitud de {nombre} completada y actualizada en Notion.");
+
+                    // 🔥 NUEVO: Si el Modo en Vivo está encendido, mandamos este log limpio a la cola de Telegram
+                    _logDispatcher.EnqueueLog($"✅ {nombre} - Solicitud enviada.");
+
                     batchDetails.AppendLine($"✅ {nombre} - Solicitud enviada.");
                     procesadosConExito++;
-
                     await Task.Delay(400);
                 }
                 catch (Exception ex)
                 {
+                    _logger.LogError($"❌ Error procesando solicitud ID {page.Id}: {ex.Message}");
                     batchDetails.AppendLine($"❌ Error en ID {page.Id}: {ex.Message}");
                     procesadosConError++;
                 }
@@ -213,10 +237,6 @@ public class NotionWorkerService : BackgroundService
         if (procesadosConExito > 0 || procesadosConError > 0)
         {
             string summary = $"📋 {procesadosConExito} solicitudes procesadas en Notion. ({procesadosConError} errores)";
-            
-            // Usaremos reflexión/extensión para enviar el Batch.
-            // Para asegurar que compila incluso si la extensión no está disponible, usamos LogWarning con un patrón especial, 
-            // pero lo más limpio es llamar a la extensión que vamos a crear:
             UnaPlan.Infrastructure.Logging.TelegramLoggerExtensions.LogTelegramBatch(_logger, summary, batchDetails.ToString());
         }
     }

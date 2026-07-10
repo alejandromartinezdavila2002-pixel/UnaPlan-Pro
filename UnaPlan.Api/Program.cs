@@ -152,6 +152,10 @@ builder.Services.AddSingleton<Notion.Client.INotionClient>(sp =>
 builder.Services.AddSingleton<NotionPublisherService>();
 builder.Services.AddHostedService(provider => provider.GetRequiredService<NotionPublisherService>());
 
+// Registramos el Dispatcher (Singleton para la cola, HostedService para el bucle)
+builder.Services.AddSingleton<TelegramLogDispatcher>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramLogDispatcher>());
+
 // ¡AQUÍ SE CONSTRUYE LA APP! (Ya no se pueden agregar más servicios al builder)
 var app = builder.Build();
 
@@ -747,20 +751,31 @@ app.MapPost("/api/telegram/webhook", async (
 // 2. Endpoint para registrar la URL en Telegram (Solo se llama una vez)
 app.MapGet("/api/telegram/register-webhook", async (IConfiguration config) =>
 {
-    var botToken = config["Telegram:BotToken"];
-    // Forzamos que sea HTTPS sí o sí. Usamos '?' para evitar la advertencia de nulo.
-    var renderUrl = config["Telegram:RenderUrl"]?.Replace("http://", "https://") ?? "";
+    try 
+    {
+        var botToken = config["Telegram:BotToken"];
+        if (string.IsNullOrEmpty(botToken)) return Results.Problem("Telegram:BotToken no está configurado en las variables de entorno.");
 
-    var botClient = new Telegram.Bot.TelegramBotClient(botToken!);
-    var webhookUrl = $"{renderUrl}/api/telegram/webhook";
+        var renderUrl = config["Telegram:RenderUrl"]?.Replace("http://", "https://") ?? "";
+        if (string.IsNullOrEmpty(renderUrl)) return Results.Problem("Telegram:RenderUrl no está configurado en las variables de entorno.");
 
-    // Agregamos un log para ver qué está intentando registrar
-    Console.WriteLine($"Registrando Webhook en: {webhookUrl}");
+        var botClient = new Telegram.Bot.TelegramBotClient(botToken);
+        var webhookUrl = $"{renderUrl}/api/telegram/webhook";
 
-    await botClient.SetWebhook(webhookUrl);
+        Console.WriteLine($"Registrando Webhook en: {webhookUrl}");
 
-    return Results.Ok($"Webhook registrado exitosamente en: {webhookUrl}");
-});
+        await botClient.SetWebhook(webhookUrl);
+
+        return Results.Ok($"Webhook registrado exitosamente en: {webhookUrl}");
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Error interno al registrar el webhook: {ex.Message}");
+    }
+})
+.ExcludeFromDescription();
+
+
 
 app.Run();
 
