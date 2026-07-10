@@ -105,10 +105,6 @@ public class NotionWorkerService : BackgroundService
             {
                 try
                 {
-                    // 🔥 DIAGNÓSTICO: Imprimir TODAS las columnas que vienen de Notion para ver por qué falla "Nombre"
-                    var todasLasColumnas = string.Join(", ", page.Properties.Select(p => $"{p.Key} ({p.Value.GetType().Name})"));
-                    _logger.LogInformation($"[DIAGNÓSTICO NOTION] Columnas detectadas: {todasLasColumnas}");
-
                     // 2. Extraer los datos de la fila de Notion de forma robusta
                     string nombre = ObtenerTextoDePropiedad(page.Properties, "Nombre Completo");
                     string correo = ObtenerTextoDePropiedad(page.Properties, "Correo");
@@ -221,10 +217,17 @@ public class NotionWorkerService : BackgroundService
                     await _notionClient.Pages.UpdatePropertiesAsync(page.Id, updateProps);
                     _logger.LogInformation($"✅ Solicitud de {nombre} completada y actualizada en Notion.");
 
-                    // 🔥 NUEVO: Si el Modo en Vivo está encendido, mandamos este log limpio a la cola de Telegram
-                    _logDispatcher.EnqueueLog($"✅ {nombre} - Solicitud enviada.");
+                    // Preparamos el mensaje de éxito para Telegram, con alerta si faltaron materias
+                    string mensajeExito = $"✅ {nombre} - Solicitud enviada.";
+                    if (materiasFaltantes.Any())
+                    {
+                        mensajeExito += $" (⚠️ Faltaron: {string.Join(", ", materiasFaltantes)})";
+                    }
 
-                    batchDetails.AppendLine($"✅ {nombre} - Solicitud enviada.");
+                    // 🔥 NUEVO: Si el Modo en Vivo está encendido, mandamos este log limpio a la cola de Telegram
+                    _logDispatcher.EnqueueLog(mensajeExito);
+
+                    batchDetails.AppendLine(mensajeExito);
                     procesadosConExito++;
                     await Task.Delay(400);
                 }
