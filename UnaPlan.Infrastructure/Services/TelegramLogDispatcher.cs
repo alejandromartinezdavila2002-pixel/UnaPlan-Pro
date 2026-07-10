@@ -8,9 +8,11 @@ using Microsoft.Extensions.Configuration;
 
 namespace UnaPlan.Infrastructure.Services;
 
+public record TelegramLogMessage(string HtmlText, Telegram.Bot.Types.ReplyMarkups.ReplyMarkup? ReplyMarkup);
+
 public class TelegramLogDispatcher : BackgroundService
 {
-    private readonly Channel<string> _logQueue;
+    private readonly Channel<TelegramLogMessage> _logQueue;
     private readonly TelegramControlService _controlService;
     private readonly ITelegramBotClient _botClient;
     private readonly List<long> _adminChatIds;
@@ -21,7 +23,7 @@ public class TelegramLogDispatcher : BackgroundService
         IConfiguration config,
         ILogger<TelegramLogDispatcher> logger)
     {
-        _logQueue = Channel.CreateUnbounded<string>();
+        _logQueue = Channel.CreateUnbounded<TelegramLogMessage>();
         _controlService = controlService;
         _logger = logger;
         _adminChatIds = config.GetSection("Telegram:AdminChatIds").Get<List<long>>() ?? new List<long>();
@@ -31,12 +33,12 @@ public class TelegramLogDispatcher : BackgroundService
     }
 
     // Método para que el NotionWorkerService llame y encole el log
-    public void EnqueueLog(string message)
+    public void EnqueueLog(string message, Telegram.Bot.Types.ReplyMarkups.ReplyMarkup? replyMarkup = null)
     {
         // Solo encolamos si el interruptor en Telegram está encendido
         if (_controlService.ModoEnVivoActivado)
         {
-            _logQueue.Writer.TryWrite(message);
+            _logQueue.Writer.TryWrite(new TelegramLogMessage(message, replyMarkup));
         }
     }
 
@@ -45,14 +47,21 @@ public class TelegramLogDispatcher : BackgroundService
         while (!stoppingToken.IsCancellationRequested)
         {
             // Esperamos a que llegue un log a la cola
-            var message = await _logQueue.Reader.ReadAsync(stoppingToken);
+            var logMessage = await _logQueue.Reader.ReadAsync(stoppingToken);
 
             // Si el interruptor se apagó mientras esperábamos, descartamos
             if (_controlService.ModoEnVivoActivado)
             {
                 foreach (var chatId in _adminChatIds)
                 {
-                    try { await _botClient.SendMessage(chatId, message); }
+                    try 
+                    { 
+                        await _botClient.SendMessage(
+                            chatId: chatId, 
+                            text: logMessage.HtmlText,
+                            parseMode: Telegram.Bot.Types.Enums.ParseMode.Html,
+                            replyMarkup: logMessage.ReplyMarkup); 
+                    }
                     catch (Exception ex) { _logger.LogError($"Error enviando log a Telegram: {ex.Message}"); }
                 }
 

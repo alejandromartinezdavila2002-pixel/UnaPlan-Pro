@@ -731,15 +731,58 @@ app.Lifetime.ApplicationStarted.Register(() =>
 // 1. Endpoint que recibe los mensajes de los botones (Webhook)
 app.MapPost("/api/telegram/webhook", async (
     [FromBody] Telegram.Bot.Types.Update update,
-    TelegramControlService telegramService) =>
+    TelegramControlService telegramService,
+    Microsoft.Extensions.Caching.Memory.IMemoryCache cache,
+    IConfiguration config) =>
 {
-    // Solo nos interesa cuando recibimos un mensaje de texto (el botón que presionaste)
+    // A. Mensaje de Texto (Botones del Teclado Inferior)
     if (update.Message != null && !string.IsNullOrEmpty(update.Message.Text))
     {
         await telegramService.ProcesarComandoTecladoAsync(
             update.Message.Chat.Id,
             update.Message.Text
         );
+    }
+
+    // B. Click en Botón Interactivo (Callback Query de logs)
+    if (update.CallbackQuery != null)
+    {
+        var callbackId = update.CallbackQuery.Data;
+        Console.WriteLine($"[Webhook] Botón presionado con ID: {callbackId}");
+        
+        if (!string.IsNullOrEmpty(callbackId))
+        {
+            if (cache.TryGetValue(callbackId, out object? batchDetailsObj) && batchDetailsObj is string batchDetails)
+            {
+                var botToken = config["Telegram:BotToken"];
+                var botClient = new Telegram.Bot.TelegramBotClient(botToken!);
+
+                try
+                {
+                    // Extraemos el texto original pero lo pasamos a HTML escapando las etiquetas básicas de HTML que manda Telegram si las tuviera (pero en nuestro caso es puro texto)
+                    var originalText = update.CallbackQuery.Message?.Text ?? "Detalles Técnicos:";
+                    var newText = $"<b>{System.Net.WebUtility.HtmlEncode(originalText)}</b>\n\n{batchDetails}";
+                    
+                    Console.WriteLine($"[Webhook] Editando mensaje de Telegram...");
+                    await botClient.EditMessageText(
+                        chatId: update.CallbackQuery.Message!.Chat.Id,
+                        messageId: update.CallbackQuery.Message.MessageId,
+                        text: newText,
+                        parseMode: Telegram.Bot.Types.Enums.ParseMode.Html,
+                        replyMarkup: null // Borramos el botón
+                    );
+                    Console.WriteLine($"[Webhook] Mensaje editado exitosamente.");
+                }
+                catch(Exception ex)
+                {
+                    Console.WriteLine($"[Webhook] Error al editar mensaje: {ex.Message}");
+                }
+            }
+            else
+            {
+                Console.WriteLine($"[Webhook] El ID {callbackId} no está en la memoria caché. Probablemente el servidor se reinició.");
+            }
+        }
     }
 
     // Telegram SIEMPRE requiere un 200 OK para saber que recibimos el mensaje

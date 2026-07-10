@@ -6,6 +6,7 @@ using System.Text.Json;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.Extensions.DependencyInjection;
+using UnaPlan.Infrastructure.Services;
 
 namespace UnaPlan.Infrastructure.Logging;
 
@@ -14,9 +15,7 @@ public class TelegramLogger : ILogger
     private readonly string _categoryName;
     private readonly TelegramLoggerOptions _options;
     private readonly System.IServiceProvider _serviceProvider;
-    
-    // Instancia estática para evitar el agotamiento de sockets (Socket Exhaustion)
-    private static readonly HttpClient _httpClient = new HttpClient();
+
 
     public TelegramLogger(string categoryName, TelegramLoggerOptions options, System.IServiceProvider serviceProvider)
     {
@@ -105,45 +104,27 @@ public class TelegramLogger : ILogger
 
         var telegramMessage = sb.ToString();
 
-        // Disparo (Fire and Forget) para no bloquear el hilo de ejecución síncrona de tu API
-        _ = Task.Run(async () =>
+        Telegram.Bot.Types.ReplyMarkups.ReplyMarkup? replyMarkup = null;
+        if (isBatch && callbackId != null)
         {
-            try
-            {
-                object? replyMarkup = null;
-                if (isBatch && callbackId != null)
+            replyMarkup = new Telegram.Bot.Types.ReplyMarkups.InlineKeyboardMarkup(
+                new[]
                 {
-                    replyMarkup = new 
-                    {
-                        inline_keyboard = new[]
-                        {
-                            new[] { new { text = "🔍 Ver detalles técnicos", callback_data = callbackId } }
-                        }
-                    };
+                    new[] { Telegram.Bot.Types.ReplyMarkups.InlineKeyboardButton.WithCallbackData("🔍 Ver detalles técnicos", callbackId) }
                 }
+            );
+        }
 
-                var payload = new
-                {
-                    chat_id = _options.AdminChatIds,
-                    text = telegramMessage,
-                    parse_mode = "HTML",
-                    reply_markup = replyMarkup
-                };
-
-                var content = new StringContent(JsonSerializer.Serialize(payload), Encoding.UTF8, "application/json");
-                var url = $"https://api.telegram.org/bot{_options.BotToken}/sendMessage";
-                
-                var response = await _httpClient.PostAsync(url, content);
-                if (!response.IsSuccessStatusCode)
-                {
-                    var error = await response.Content.ReadAsStringAsync();
-                    Console.WriteLine($"[TelegramLogger] Error de la API de Telegram: {error}");
-                }
-            }
-            catch (Exception ex)
-            {
-                Console.WriteLine($"[TelegramLogger] Falló el envío de red a Telegram: {ex.Message}");
-            }
-        });
+        // Resolución "Lazy" del Dispatcher para evitar Dependencia Circular
+        var dispatcher = _serviceProvider.GetService<TelegramLogDispatcher>();
+        if (dispatcher != null)
+        {
+            dispatcher.EnqueueLog(telegramMessage, replyMarkup);
+        }
+        else
+        {
+            // Fallback (Solo si el Dispatcher no pudo resolverse durante el inicio)
+            Console.WriteLine($"[TelegramLogger Fallback] {telegramMessage.Replace("<b>", "").Replace("</b>", "")}");
+        }
     }
 }

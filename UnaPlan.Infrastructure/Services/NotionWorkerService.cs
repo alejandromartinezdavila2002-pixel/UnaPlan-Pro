@@ -72,13 +72,13 @@ public class NotionWorkerService : BackgroundService
 
     private async Task ProcesarSolicitudesPendientesAsync(AppDbContext db)
     {
-        // 1. Consultar a Notion por filas que tengan Estado == "Pendiente"
+        // 1. Consultar a Notion por filas que tengan Estado vacío (Sin procesar)
         var queryParams = new DatabasesQueryParameters
         {
             Filter = new CompoundFilter(
                 and: new List<Filter>
                 {
-                    new SelectFilter("Estado", equal: "Pendiente")
+                    new SelectFilter("Estado", isEmpty: true)
                 }
             )
         };
