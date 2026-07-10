@@ -27,11 +27,21 @@ builder.Logging.AddTelegramBot(options =>
 {
     options.BotToken = builder.Configuration["Telegram:BotToken"] ?? "";
 
-    // Extraemos la lista de administradores desde Secrets o Render
-    var admins = builder.Configuration.GetSection("Telegram:AdminChatIds").Get<List<long>>();
-    if (admins != null)
+    // Extraemos la lista de administradores desde Secrets o Render (soportando formato de comas)
+    var adminIdsString = builder.Configuration["Telegram:AdminChatIds"];
+    if (!string.IsNullOrEmpty(adminIdsString))
     {
-        options.AdminChatIds = admins;
+        options.AdminChatIds = adminIdsString.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                             .Select(id => long.Parse(id.Trim()))
+                                             .ToList();
+    }
+    else
+    {
+        var admins = builder.Configuration.GetSection("Telegram:AdminChatIds").Get<List<long>>();
+        if (admins != null)
+        {
+            options.AdminChatIds = admins;
+        }
     }
 
     options.RenderUrl = builder.Configuration["Telegram:RenderUrl"] ?? "";

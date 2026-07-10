@@ -26,7 +26,17 @@ public class TelegramLogDispatcher : BackgroundService
         _logQueue = Channel.CreateUnbounded<TelegramLogMessage>();
         _controlService = controlService;
         _logger = logger;
-        _adminChatIds = config.GetSection("Telegram:AdminChatIds").Get<List<long>>() ?? new List<long>();
+        var adminIdsString = config["Telegram:AdminChatIds"];
+        if (!string.IsNullOrEmpty(adminIdsString))
+        {
+            _adminChatIds = adminIdsString.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                          .Select(id => long.Parse(id.Trim()))
+                                          .ToList();
+        }
+        else
+        {
+            _adminChatIds = config.GetSection("Telegram:AdminChatIds").Get<List<long>>() ?? new List<long>();
+        }
         
         var token = config["Telegram:BotToken"];
         _botClient = new Telegram.Bot.TelegramBotClient(token!);

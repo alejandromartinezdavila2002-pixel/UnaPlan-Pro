@@ -25,8 +25,19 @@ public class TelegramControlService
         var token = config["Telegram:BotToken"] ?? throw new ArgumentNullException("Telegram:BotToken no configurado en los secretos.");
         _botClient = new TelegramBotClient(token);
 
-        // Obtenemos la lista de admins para seguridad (El Portero)
-        _adminChatIds = config.GetSection("Telegram:AdminChatIds").Get<List<long>>() ?? new List<long>();
+        // Hacemos la lectura robusta: Si viene como un string separado por comas (típico en variables de entorno), lo parseamos.
+        // Si no, intentamos leerlo como lista directa (típico en appsettings.json).
+        var adminIdsString = config["Telegram:AdminChatIds"];
+        if (!string.IsNullOrEmpty(adminIdsString))
+        {
+            _adminChatIds = adminIdsString.Split(',', StringSplitOptions.RemoveEmptyEntries)
+                                          .Select(id => long.Parse(id.Trim()))
+                                          .ToList();
+        }
+        else
+        {
+            _adminChatIds = config.GetSection("Telegram:AdminChatIds").Get<List<long>>() ?? new List<long>();
+        }
     }
 
     // 1. Enviar el panel principal al arrancar el servidor
