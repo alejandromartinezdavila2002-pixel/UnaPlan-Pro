@@ -48,6 +48,7 @@ public class CatalogoScraperService
 
     public static readonly Dictionary<string, string> CarpetasTp = new()
     {
+        { "0", "1zSmylBd2L3lXW-8Ttgrw8p56Q4xaR6IX" }, // 000-099
         { "1", "1PEQRe2W8SqkknAmBZbPUgxRnxAyxf2_W" }, // 100-199
         { "2", "108shUWVobZJ_7P1ejEW5k6f7kTiseZYO" }, // 200-299
         { "3", "1PLReKygdtO_XaTr0EgDsdvldU2mdmtbp" }, // 300-399
