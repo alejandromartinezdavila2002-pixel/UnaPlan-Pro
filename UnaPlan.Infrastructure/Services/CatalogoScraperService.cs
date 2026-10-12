@@ -20,6 +20,10 @@ public class CatalogoScraperService
     private readonly EmailService _emailService;
     private readonly Microsoft.Extensions.Logging.ILogger<CatalogoScraperService> _logger;
 
+    // 🔒 Candado global (static porque el servicio es Scoped): evita que el escaneo manual
+    // y el del TpMonitorWorkerService corran a la vez y dupliquen registros/correos.
+    private static readonly SemaphoreSlim _candadoEscaneoTp = new(1, 1);
+
     // 2. El Constructor: Aquí es donde la API le "inyecta" la conexión al servicio
     public CatalogoScraperService(AppDbContext db, EmailService emailService, Microsoft.Extensions.Logging.ILogger<CatalogoScraperService> logger)
     {
@@ -466,17 +470,45 @@ public class CatalogoScraperService
     // ========================================================================
     // 6B. MOTOR DE ESCANEO ESTRATÉGICO (TPs - Búsqueda de pendientes)
     // ========================================================================
-    public async Task EscanearTpPendientesAsync()
+    /// <param name="esperarSiOcupado">
+    /// true (worker): espera a que termine el escaneo en curso.
+    /// false (manual): si ya hay uno corriendo, regresa de inmediato con EscaneoEnCurso = true.
+    /// </param>
+    public async Task<ResultadoEscaneoTp> EscanearTpPendientesAsync(bool esperarSiOcupado = true)
     {
+        if (esperarSiOcupado)
+        {
+            await _candadoEscaneoTp.WaitAsync();
+        }
+        else if (!await _candadoEscaneoTp.WaitAsync(0))
+        {
+            return new ResultadoEscaneoTp { EscaneoEnCurso = true };
+        }
+
+        try
+        {
+            return await EscanearTpPendientesInternoAsync();
+        }
+        finally
+        {
+            _candadoEscaneoTp.Release();
+        }
+    }
+
+    private async Task<ResultadoEscaneoTp> EscanearTpPendientesInternoAsync()
+    {
+        var resultado = new ResultadoEscaneoTp();
         var driveService = GetDriveService();
 
         // Buscamos TPs en toda la base de datos que AÚN NO tengan un registro en TrabajosPublicados
         var tpPendientes = await _db.Evaluaciones
-            .Where(e => e.Tipo.Contains("TP"))
+            // StartsWith (no Contains): "TSP" también contiene "TP" y se colaba en la búsqueda de TPs
+            .Where(e => e.Tipo.StartsWith("TP"))
             .Where(e => !_db.TrabajosPublicados.Any(t => t.MateriaEvaluacionId == e.Id))
             .ToListAsync();
 
-        if (!tpPendientes.Any()) return; // Si ya encontramos todos los TPs del semestre, no hacemos nada
+        resultado.PendientesRevisados = tpPendientes.Count;
+        if (!tpPendientes.Any()) return resultado; // Si ya encontramos todos los TPs del semestre, no hacemos nada
 
         int procesadosConExito = 0;
         int alertasEnviadas = 0;
@@ -487,7 +519,11 @@ public class CatalogoScraperService
             if (string.IsNullOrEmpty(eval.CodigoMateria)) continue;
 
             string prefijo = eval.CodigoMateria.Substring(0, 1);
-            if (!CarpetasTp.ContainsKey(prefijo)) continue;
+            if (!CarpetasTp.ContainsKey(prefijo))
+            {
+                resultado.SiguenPendientes.Add($"{eval.CodigoMateria} ({eval.Tipo}) · sin carpeta TP configurada");
+                continue;
+            }
 
             string idCarpeta = CarpetasTp[prefijo];
 
@@ -551,14 +587,36 @@ public class CatalogoScraperService
 
                 procesadosConExito++;
                 batchDetails.AppendLine($"✅ {eval.CodigoMateria} (Alertas: {estudiantesInteresados.Count})");
+                resultado.Encontrados.Add($"{eval.CodigoMateria} ({eval.Tipo}) · {estudiantesInteresados.Count} alertas");
+            }
+            else
+            {
+                resultado.SiguenPendientes.Add($"{eval.CodigoMateria} ({eval.Tipo})");
             }
         }
+
+        resultado.AlertasEnviadas = alertasEnviadas;
 
         if (procesadosConExito > 0)
         {
             string summary = $"📋 {procesadosConExito} nuevos TP encontrados en Drive. ({alertasEnviadas} alertas enviadas).";
             UnaPlan.Infrastructure.Logging.TelegramLoggerExtensions.LogTelegramBatch(_logger, summary, batchDetails.ToString());
         }
+
+        return resultado;
     }
 
+}
+
+// ========================================================================
+// Resultado del escaneo de TPs (lo usan el endpoint manual y el botón de Telegram)
+// ========================================================================
+public class ResultadoEscaneoTp
+{
+    /// <summary>true si ya había otro escaneo corriendo y este no se ejecutó.</summary>
+    public bool EscaneoEnCurso { get; set; }
+    public int PendientesRevisados { get; set; }
+    public int AlertasEnviadas { get; set; }
+    public List<string> Encontrados { get; set; } = new();
+    public List<string> SiguenPendientes { get; set; } = new();
 }

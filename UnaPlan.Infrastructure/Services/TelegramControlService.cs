@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using System;
 using System.Collections.Generic;
@@ -14,13 +15,17 @@ public class TelegramControlService
     private readonly ITelegramBotClient _botClient;
     private readonly ILogger<TelegramControlService> _logger;
     private readonly List<long> _adminChatIds;
+    private readonly IServiceScopeFactory _scopeFactory;
+
+    public const string BotonBuscarTps = "🔎 Buscar TPs ahora";
 
     // 🧠 Memoria volátil: Falso por defecto cada vez que el servidor arranca
     public bool ModoEnVivoActivado { get; private set; } = false;
 
-    public TelegramControlService(IConfiguration config, ILogger<TelegramControlService> logger)
+    public TelegramControlService(IConfiguration config, ILogger<TelegramControlService> logger, IServiceScopeFactory scopeFactory)
     {
         _logger = logger;
+        _scopeFactory = scopeFactory;
 
         var token = config["Telegram:BotToken"] ?? throw new ArgumentNullException("Telegram:BotToken no configurado en los secretos.");
         _botClient = new TelegramBotClient(token);
@@ -71,6 +76,13 @@ public class TelegramControlService
         // Seguridad estricta
         if (!_adminChatIds.Contains(chatId)) return;
 
+        // 🔎 Búsqueda manual de TPs
+        if (comandoTexto == BotonBuscarTps)
+        {
+            await IniciarBusquedaManualTpAsync(chatId);
+            return;
+        }
+
         // Lógica del interruptor basado en el texto del botón
         if (comandoTexto == "🟢 Encender Logs en Vivo" && !ModoEnVivoActivado)
         {
@@ -108,6 +120,79 @@ public class TelegramControlService
         }
     }
 
+    // 2B. Búsqueda manual de TPs desde Telegram
+    private async Task IniciarBusquedaManualTpAsync(long chatId)
+    {
+        await EnviarSeguroAsync(chatId, "⏳ <b>Buscando TPs pendientes en Drive...</b>\n<i>Te aviso aquí cuando termine.</i>");
+
+        // Corre en segundo plano: el webhook debe devolver 200 rápido o Telegram reintenta
+        // el mismo update y dispararía la búsqueda varias veces.
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                using var scope = _scopeFactory.CreateScope();
+                var scraper = scope.ServiceProvider.GetRequiredService<CatalogoScraperService>();
+                var resultado = await scraper.EscanearTpPendientesAsync(esperarSiOcupado: false);
+
+                await EnviarSeguroAsync(chatId, FormatearResultadoTp(resultado));
+                _logger.LogInformation($"[Telegram] Búsqueda manual de TPs ejecutada por {chatId}: {resultado.Encontrados.Count} encontrados.");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "[Telegram] Error en la búsqueda manual de TPs.");
+                await EnviarSeguroAsync(chatId, $"❌ <b>Error buscando TPs:</b> {System.Net.WebUtility.HtmlEncode(ex.Message)}");
+            }
+        });
+    }
+
+    public static string FormatearResultadoTp(ResultadoEscaneoTp r)
+    {
+        if (r.EscaneoEnCurso)
+            return "⚠️ Ya hay un escaneo de TPs en curso (manual o del vigilante). Intenta de nuevo en unos minutos.";
+
+        if (r.PendientesRevisados == 0)
+            return "🏆 <b>Semestre al día.</b> No hay TPs pendientes en la base de datos.";
+
+        var sb = new System.Text.StringBuilder();
+        sb.AppendLine($"🔎 <b>Búsqueda manual de TPs terminada</b>");
+        sb.AppendLine($"Revisados: {r.PendientesRevisados} · Encontrados: {r.Encontrados.Count} · Alertas: {r.AlertasEnviadas}");
+
+        AgregarLista(sb, "✅ Publicados ahora", r.Encontrados);
+        AgregarLista(sb, "⏳ Siguen sin aparecer", r.SiguenPendientes);
+
+        return sb.ToString();
+    }
+
+    private static void AgregarLista(System.Text.StringBuilder sb, string titulo, List<string> items)
+    {
+        if (items.Count == 0) return;
+        const int max = 25; // Telegram corta en 4096 caracteres
+
+        sb.AppendLine().AppendLine($"<b>{titulo}:</b>");
+        foreach (var item in items.Take(max))
+            sb.AppendLine($"• {System.Net.WebUtility.HtmlEncode(item)}");
+        if (items.Count > max)
+            sb.AppendLine($"<i>...y {items.Count - max} más</i>");
+    }
+
+    private async Task EnviarSeguroAsync(long chatId, string html)
+    {
+        try
+        {
+            await _botClient.SendMessage(
+                chatId: chatId,
+                text: html,
+                parseMode: ParseMode.Html,
+                replyMarkup: CrearTecladoDinamico()
+            );
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError($"Error enviando mensaje a Telegram: {ex.Message}");
+        }
+    }
+
     // 3. Constructor del teclado persistente en la parte inferior
     private ReplyKeyboardMarkup CrearTecladoDinamico()
     {
@@ -115,7 +200,8 @@ public class TelegramControlService
 
         return new ReplyKeyboardMarkup(new[]
         {
-            new KeyboardButton[] { textoBoton }
+            new KeyboardButton[] { textoBoton },
+            new KeyboardButton[] { BotonBuscarTps }
         })
         {
             ResizeKeyboard = true, // Hace que el teclado se ajuste bonito y no ocupe media pantalla

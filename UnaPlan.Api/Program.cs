@@ -446,6 +446,36 @@ app.MapDelete("/api/admin/limpiar-catalogo", async (CatalogoScraperService scrap
 .WithSummary("3. Vaciar tablas (Borrado total)")
 .WithDescription("Elimina todos los registros de Planes de Curso y Materiales de Apoyo de la base de datos de un solo golpe usando ExecuteDeleteAsync.");
 
+// ---> 4. BÚSQUEDA MANUAL DE TPs (sin esperar al vigilante sabatino)
+app.MapPost("/api/admin/tp/buscar-ahora", async (CatalogoScraperService scraper) =>
+{
+    try
+    {
+        var resultado = await scraper.EscanearTpPendientesAsync(esperarSiOcupado: false);
+
+        if (resultado.EscaneoEnCurso)
+            return Results.Conflict(new { mensaje = "Ya hay un escaneo de TPs en curso (manual o del vigilante). Intenta en unos minutos." });
+
+        return Results.Ok(new
+        {
+            mensaje = resultado.PendientesRevisados == 0
+                ? "Semestre al día: no hay TPs pendientes."
+                : $"Búsqueda terminada: {resultado.Encontrados.Count} de {resultado.PendientesRevisados} TPs pendientes encontrados en Drive.",
+            resultado.PendientesRevisados,
+            resultado.AlertasEnviadas,
+            resultado.Encontrados,
+            resultado.SiguenPendientes
+        });
+    }
+    catch (Exception ex)
+    {
+        return Results.Problem($"Error buscando TPs: {ex.Message}");
+    }
+})
+.WithTags("5. Panel de Administración")
+.WithSummary("4. Buscar TPs pendientes ahora")
+.WithDescription("Ejecuta en el momento el mismo escaneo de Drive que hace el TpMonitorWorkerService los sábados: registra los TPs que ya salieron y envía las alertas por correo a los suscritos. Devuelve 409 si ya hay un escaneo corriendo.");
+
 
 // ========================================================================
 // 5. ENDPOINTS PÚBLICOS (Para Estudiantes)
