@@ -206,6 +206,45 @@ public class EmailService
     }
 
     // =========================================================================
+    // 📚 Ponerse al día: trabajos que ya estaban publicados al momento de suscribirse
+    // =========================================================================
+    public async Task EnviarTrabajosYaPublicadosAsync(string destinatario, string nombreEstudiante, List<TrabajoParaCorreo> trabajos)
+    {
+        var email = new MimeMessage();
+        email.From.Add(new MailboxAddress(_config["SmtpSettings:SenderName"], _config["SmtpSettings:SenderEmail"]));
+        email.To.Add(new MailboxAddress(nombreEstudiante, destinatario));
+        email.Subject = trabajos.Count == 1
+            ? $"📚 Tu {trabajos[0].Tipo} de la materia {trabajos[0].CodigoMateria} ya está disponible"
+            : $"📚 Ya tienes {trabajos.Count} trabajos publicados de tus materias";
+
+        var filas = string.Join("", trabajos.Select(t => $@"
+                <div style='background-color: #f8f9fa; padding: 12px 15px; border-left: 4px solid #28a745; margin: 12px 0;'>
+                    <p style='margin: 0 0 6px 0;'><strong>Materia {t.CodigoMateria}</strong> · {t.Tipo}</p>
+                    <p style='margin: 0 0 8px 0; font-size: 14px;'>Fecha límite de entrega: <strong>{t.FechaEntrega:dd/MM/yyyy}</strong></p>
+                    <a href='{t.UrlDrive}' style='color: #0056b3; font-weight: bold; text-decoration: none;'>📄 Ver documento oficial en Drive</a>
+                </div>"));
+
+        string cuerpoHtml = $@"
+        <div style='font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #ddd; border-radius: 10px; overflow: hidden;'>
+            <div style='background-color: #0056b3; padding: 20px; text-align: center;'>
+                <h2 style='color: white; margin: 0;'>Trabajos ya publicados</h2>
+            </div>
+            <div style='padding: 20px;'>
+                <p>Hola <strong>{nombreEstudiante}</strong>,</p>
+                <p>Al momento de tu suscripción, la universidad ya había publicado estos trabajos de tus materias inscritas:</p>
+                {filas}
+                <p>A partir de ahora te avisaremos por correo apenas se publique cada trabajo nuevo.</p>
+                <p style='font-size: 12px; color: #777; text-align: center;'>Recibes este correo porque estás suscrito a las alertas de UnaPlan.</p>
+            </div>
+        </div>";
+
+        email.Body = new BodyBuilder { HtmlBody = cuerpoHtml }.ToMessageBody();
+
+        VerificarYRegistrarEnvio();
+        await EnviarConGmailApiAsync(email);
+    }
+
+    // =========================================================================
     // 🔔 CRM: Alerta de Inactividad Semestral
     // =========================================================================
     public async Task EnviarCorreoAdvertenciaInactividadAsync(EstudiantesSuscritos estudiante)

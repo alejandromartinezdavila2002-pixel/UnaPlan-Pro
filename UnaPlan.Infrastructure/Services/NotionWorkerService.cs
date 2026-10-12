@@ -100,6 +100,7 @@ public class NotionWorkerService : BackgroundService
         {
             var emailService = scope.ServiceProvider.GetRequiredService<EmailService>();
             var excelService = scope.ServiceProvider.GetRequiredService<ExcelGeneratorService>();
+            var suscripcionService = scope.ServiceProvider.GetRequiredService<SuscripcionService>();
 
             foreach (var page in response.Results.OfType<Page>())
             {
@@ -118,10 +119,7 @@ public class NotionWorkerService : BackgroundService
                     }
 
                     // 3. Procesar las materias (separadas por coma o espacio)
-                    var listaMaterias = materiasRaw
-                        .Split(new[] { ',', ' ' }, StringSplitOptions.RemoveEmptyEntries)
-                        .Select(m => m.Trim())
-                        .ToList();
+                    var listaMaterias = SuscripcionService.ParsearMaterias(materiasRaw);
 
                     // 4. Buscar en la Base de Datos los planes, materiales y evaluaciones de esas materias
                     var planes = await db.PlanesDeCurso
@@ -184,29 +182,8 @@ public class NotionWorkerService : BackgroundService
                     await emailService.EnviarPlanPersonalizadoAsync(correo, nombre, excelBytes, materiasFaltantes);
 
                     // 7. Guardar o actualizar al estudiante en nuestra tabla "EstudiantesSuscritos" de Supabase
-                    var estudianteExistente = await db.EstudiantesSuscritos
-                        .FirstOrDefaultAsync(e => e.Correo == correo);
-
-                    if (estudianteExistente != null)
-                    {
-                        estudianteExistente.Nombre = nombre;
-                        estudianteExistente.MateriasInscritas = listaMaterias;
-                        estudianteExistente.FechaSuscripcion = DateTime.UtcNow;
-                        db.EstudiantesSuscritos.Update(estudianteExistente);
-                    }
-                    else
-                    {
-                        var nuevoEstudiante = new EstudiantesSuscritos
-                        {
-                            Nombre = nombre,
-                            Correo = correo,
-                            MateriasInscritas = listaMaterias,
-                            FechaSuscripcion = DateTime.UtcNow
-                        };
-                        await db.EstudiantesSuscritos.AddAsync(nuevoEstudiante);
-                    }
-
-                    await db.SaveChangesAsync();
+                    //    (y enviarle los trabajos que ya estaban publicados de sus materias)
+                    var suscripcion = await suscripcionService.SuscribirAsync(nombre, correo, listaMaterias);
 
                     // --- CIERRE DEL CICLO: Actualizamos el Estado en Notion a "Enviado" ---
                     var updateProps = new Dictionary<string, PropertyValue>
@@ -222,6 +199,14 @@ public class NotionWorkerService : BackgroundService
                     if (materiasFaltantes.Any())
                     {
                         mensajeExito += $" (⚠️ Faltaron: {string.Join(", ", materiasFaltantes)})";
+                    }
+                    if (suscripcion.TrabajosEnviados > 0)
+                    {
+                        mensajeExito += $" 📚 +{suscripcion.TrabajosEnviados} trabajos ya publicados.";
+                    }
+                    if (suscripcion.ErrorEnvioTrabajos != null)
+                    {
+                        mensajeExito += $" ⚠️ Falló el correo de trabajos publicados: {suscripcion.ErrorEnvioTrabajos}";
                     }
 
                     // 🔥 NUEVO: Si el Modo en Vivo está encendido, mandamos este log limpio a la cola de Telegram

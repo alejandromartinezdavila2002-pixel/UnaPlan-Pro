@@ -125,6 +125,9 @@ builder.Services.AddSingleton<GmailService>(sp =>
 
 builder.Services.AddScoped<EmailService>();
 
+// Suscripción única de estudiantes (endpoint + Notion) y envío de trabajos ya publicados
+builder.Services.AddScoped<SuscripcionService>();
+
 
 // Registra el trabajador en segundo plano
 builder.Services.AddHostedService<SupabaseKeepAliveService>();
@@ -485,22 +488,20 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
     [FromBody] SolicitudPlanDto solicitud,
     AppDbContext db,
     ExcelGeneratorService excelService,
-    EmailService emailService) =>
+    EmailService emailService,
+    SuscripcionService suscripcionService) =>
 {
     // 1. Validación inicial
     if (string.IsNullOrWhiteSpace(solicitud.CodigosMaterias))
         return Results.BadRequest("Debes proporcionar al menos un código de materia.");
 
+    if (string.IsNullOrWhiteSpace(solicitud.CorreoElectronico))
+        return Results.BadRequest("Debes proporcionar un correo electrónico.");
+
     try
     {
-        // 2. PARSER INDESTRUCTIBLE
-        char[] separadores = { ',', '.', ' ', '-', ';' };
-
-        List<string> listaMaterias = solicitud.CodigosMaterias
-            .Split(separadores, StringSplitOptions.RemoveEmptyEntries)
-            .Select(m => m.Trim())
-            .Distinct()
-            .ToList();
+        // 2. PARSER INDESTRUCTIBLE (compartido con Notion)
+        List<string> listaMaterias = SuscripcionService.ParsearMaterias(solicitud.CodigosMaterias);
 
         if (!listaMaterias.Any())
             return Results.BadRequest("El formato de los códigos proporcionados no es válido o está vacío.");
@@ -564,7 +565,20 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
             archivoExcelBytes,
             materiasNoEncontradas);
 
-        return Results.Ok(new { mensaje = $"¡Plan generado! Se ha enviado el Excel a {solicitud.CorreoElectronico}" });
+        // 8. Suscribir al estudiante (igual que por Notion) y enviarle los trabajos ya publicados
+        var suscripcion = await suscripcionService.SuscribirAsync(
+            solicitud.NombreCompleto,
+            solicitud.CorreoElectronico,
+            listaMaterias);
+
+        return Results.Ok(new
+        {
+            mensaje = $"¡Plan generado! Se ha enviado el Excel a {solicitud.CorreoElectronico}",
+            suscrito = true,
+            suscripcionNueva = suscripcion.EsNuevo,
+            trabajosYaPublicadosEnviados = suscripcion.TrabajosEnviados,
+            errorTrabajosPublicados = suscripcion.ErrorEnvioTrabajos
+        });
     }
     catch (Exception ex)
     {
@@ -573,7 +587,7 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 })
 .WithTags("7. Servicios para Estudiantes")
 .WithSummary("Generar y enviar Plan de Evaluación en Excel")
-.WithDescription("Recibe las materias inscritas por el estudiante, genera un archivo Excel en memoria y se lo envía automáticamente por correo electrónico.");
+.WithDescription("Recibe las materias inscritas por el estudiante, genera un archivo Excel en memoria y se lo envía por correo. Además lo suscribe en EstudiantesSuscritos (igual que el formulario de Notion) y le envía en un correo aparte los TP/TSP ya publicados de sus materias que no han vencido.");
 
 
 
