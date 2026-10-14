@@ -288,32 +288,22 @@ public class EmailService
 
 
 
-
     // =========================================================================
-    // 🔔 CRM: Broadcast Masivo de Convocatoria de Nuevo Semestre
+    // 🔔 CRM: Convocatoria de Nuevo Semestre (UN estudiante)
+    // El lote — tope diario, reanudación y marca FechaConvocatoria — lo orquesta
+    // PeriodoAcademicoService.EnviarConvocatoriaAsync.
+    // Lanza InvalidOperationException si el guardián del límite diario corta el envío.
     // =========================================================================
-    public async Task<(int exitosos, int fallidos)> EnviarConvocatoriaNuevoSemestreMasivoAsync(List<EstudiantesSuscritos> estudiantes)
+    public async Task EnviarConvocatoriaNuevoSemestreAsync(EstudiantesSuscritos estudiante)
     {
-        int exitosos = 0;
-        int fallidos = 0;
-        int contadorActual = 1; // Para saber por cuál vamos
+        var email = new MimeMessage();
+        email.From.Add(new MailboxAddress(_config["SmtpSettings:SenderName"], _config["SmtpSettings:SenderEmail"]));
+        email.To.Add(new MailboxAddress(estudiante.Nombre, estudiante.Correo));
+        email.Subject = $"🚀 ¡Inicia el nuevo semestre! Actualiza tus materias en UnaPlan";
 
-        Console.WriteLine($"\n[CRM] 🚀 INICIANDO BROADCAST MASIVO PARA {estudiantes.Count} ESTUDIANTES...");
-
-        foreach (var estudiante in estudiantes)
+        var builder = new BodyBuilder
         {
-            try
-            {
-                Console.Write($"[CRM] {contadorActual}/{estudiantes.Count} - Enviando a {estudiante.Correo}... ");
-
-                var email = new MimeMessage();
-                email.From.Add(new MailboxAddress(_config["SmtpSettings:SenderName"], _config["SmtpSettings:SenderEmail"]));
-                email.To.Add(new MailboxAddress(estudiante.Nombre, estudiante.Correo));
-                email.Subject = $"🚀 ¡Inicia el nuevo semestre! Actualiza tus materias en UnaPlan";
-
-                var builder = new BodyBuilder
-                {
-                    HtmlBody = $@"
+            HtmlBody = $@"
                 <div style='font-family: Arial, sans-serif; color: #333; max-width: 600px; margin: auto; border: 1px solid #0056b3; border-radius: 8px; overflow: hidden;'>
                     <div style='background-color: #0056b3; padding: 20px; text-align: center;'>
                         <h2 style='color: white; margin: 0;'>¡Nuevo Periodo Académico UNA! 🎓</h2>
@@ -328,36 +318,31 @@ public class EmailService
                         <p style='font-size: 12px; color: #777; text-align: center;'>Recuerda mantener tus materias al día para recibir las alertas en tiempo real de TP y TSP directamente en tu bandeja de entrada.</p>
                     </div>
                 </div>"
-                };
-                email.Body = builder.ToMessageBody();
+        };
+        email.Body = builder.ToMessageBody();
 
-                // 🛡️ Guardián de seguridad: Verifica el límite diario antes de procesar
-                VerificarYRegistrarEnvio();
+        // 🛡️ Guardián de seguridad: Verifica el límite diario antes de procesar
+        VerificarYRegistrarEnvio();
 
-                // 🚀 Envío individual a través de Gmail API
-                await EnviarConGmailApiAsync(email);
+        // 🚀 Envío individual a través de Gmail API
+        await EnviarConGmailApiAsync(email);
+    }
 
-                Console.WriteLine("✅ ÉXITO");
-                exitosos++;
+    // =========================================================================
+    // ¿Gmail rechazó el envío porque se agotó la cuota? (429, o 403 con razón de límite)
+    // En ese caso hay que detener el lote: los siguientes también fallarían.
+    // =========================================================================
+    public static bool EsCuotaGmailAgotada(Exception ex)
+    {
+        if (ex is not Google.GoogleApiException g) return false;
 
-                // Pequeño delay para no saturar Google
-                await Task.Delay(200);
-            }
-            catch (InvalidOperationException ex)
-            {
-                _logger.LogWarning($"\n[CRM] 🛑 GUARDIÁN ACTIVADO: {ex.Message}");
-                throw new InvalidOperationException($"Proceso masivo interrumpido. {ex.Message} (Enviados con éxito en este lote: {exitosos})");
-            }
-            catch (Exception ex) // ¡Atrapamos la excepción real para verla!
-            {
-                _logger.LogError(ex, $"❌ FALLÓ: {ex.Message}");
-                fallidos++;
-            }
+        if ((int)g.HttpStatusCode == 429) return true;
 
-            contadorActual++;
-        }
+        var razones = g.Error?.Errors?.Select(e => e.Reason ?? "") ?? Enumerable.Empty<string>();
+        var texto = string.Join(" ", razones) + " " + (g.Error?.Message ?? g.Message);
 
-        Console.WriteLine($"[CRM] 🏁 BROADCAST FINALIZADO. Exitosos: {exitosos} | Fallidos: {fallidos}\n");
-        return (exitosos, fallidos);
+        return (int)g.HttpStatusCode == 403 &&
+               (texto.Contains("limit", StringComparison.OrdinalIgnoreCase) ||
+                texto.Contains("quota", StringComparison.OrdinalIgnoreCase));
     }
 }

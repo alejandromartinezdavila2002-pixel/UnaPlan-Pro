@@ -15,11 +15,17 @@ public class PdfExtractorService
 
     public CalendarioProcesado ProcesarCalendarioPdf(string rutaArchivo)
     {
-        var nombreArchivo = Path.GetFileName(rutaArchivo);
+        using var stream = File.OpenRead(rutaArchivo);
+        return ProcesarCalendarioPdf(stream, Path.GetFileName(rutaArchivo));
+    }
+
+    // Sobrecarga para PDFs que llegan en memoria (ej. descargados desde Telegram)
+    public CalendarioProcesado ProcesarCalendarioPdf(Stream pdf, string nombreArchivo)
+    {
         var evaluacionesEncontradas = new List<MateriaEvaluacion>();
 
         // Abrimos el PDF directamente en la memoria RAM
-        using (var document = PdfDocument.Open(rutaArchivo))
+        using (var document = PdfDocument.Open(pdf))
         {
             foreach (var page in document.GetPages())
             {

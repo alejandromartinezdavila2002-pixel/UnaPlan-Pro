@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Memory;
 using Microsoft.OpenApi.Models;
 using System.Net.NetworkInformation;
 using UnaPlan.Core.Entities;
@@ -128,6 +129,11 @@ builder.Services.AddScoped<EmailService>();
 // Suscripción única de estudiantes (endpoint + Notion) y envío de trabajos ya publicados
 builder.Services.AddScoped<SuscripcionService>();
 
+// Ciclo de periodo académico (PDF → limpiar → cargar → convocatoria) y plan individual.
+// Los usan tanto los endpoints como el panel de Telegram.
+builder.Services.AddScoped<PeriodoAcademicoService>();
+builder.Services.AddScoped<PlanEstudianteService>();
+
 
 // Registra el trabajador en segundo plano
 builder.Services.AddHostedService<SupabaseKeepAliveService>();
@@ -139,6 +145,9 @@ builder.Services.AddHostedService<NotionWorkerService>();
 
 builder.Services.AddHostedService<TpMonitorWorkerService>();
 builder.Services.AddHostedService<TspMonitorWorkerService>();
+
+// Reanuda la convocatoria de nuevo semestre cuando se libera cupo (tope por 24 h)
+builder.Services.AddHostedService<ConvocatoriaWorkerService>();
 
 // Aquí es donde registramos el cliente de Notion, pero sin hardcodear el token
 // Registro del cliente de Notion usando IConfiguration para evitar Hardcoding
@@ -206,7 +215,7 @@ app.UseHttpsRedirection();
 // ========================================================================
 
 // ---> ENDPOINT 1: PREVISUALIZAR
-app.MapPost("/api/calendarios/preview", async (IFormFile archivoPdf, PdfExtractorService extractor) =>
+app.MapPost("/api/calendarios/preview", async (IFormFile archivoPdf, PeriodoAcademicoService periodo) =>
 {
     if (archivoPdf == null || archivoPdf.Length == 0)
         return Results.BadRequest("No se envió ningún archivo.");
@@ -214,22 +223,12 @@ app.MapPost("/api/calendarios/preview", async (IFormFile archivoPdf, PdfExtracto
     if (archivoPdf.ContentType != "application/pdf")
         return Results.BadRequest("El archivo debe ser un PDF.");
 
-    var rutaTemporal = Path.GetTempFileName();
-    using (var stream = new FileStream(rutaTemporal, FileMode.Create))
-    {
-        await archivoPdf.CopyToAsync(stream);
-    }
+    // Se procesa en memoria (sin archivo temporal), igual que el panel de Telegram
+    using var memoria = new MemoryStream();
+    await archivoPdf.CopyToAsync(memoria);
+    memoria.Position = 0;
 
-    var resultadoPreview = extractor.ProcesarCalendarioPdf(rutaTemporal);
-
-    // ¡AQUÍ ESTÁ LA MAGIA! 🪄
-   
-    resultadoPreview.NombreArchivo = archivoPdf.FileName;
-
-    if (File.Exists(rutaTemporal))
-    {
-        File.Delete(rutaTemporal);
-    }
+    var resultadoPreview = periodo.ExtraerCalendario(memoria, archivoPdf.FileName);
 
     return Results.Ok(resultadoPreview);
 })
@@ -240,17 +239,14 @@ app.MapPost("/api/calendarios/preview", async (IFormFile archivoPdf, PdfExtracto
 
 
 // ---> ENDPOINT 2: CONFIRMAR Y GUARDAR
-app.MapPost("/api/calendarios/confirm", async ([FromBody] CalendarioProcesado calendarioConfirmado, AppDbContext db) =>
+app.MapPost("/api/calendarios/confirm", async ([FromBody] CalendarioProcesado calendarioConfirmado, PeriodoAcademicoService periodo) =>
 {
     if (calendarioConfirmado == null || !calendarioConfirmado.Evaluaciones.Any())
         return Results.BadRequest("El JSON de confirmación está vacío o inválido.");
 
-    calendarioConfirmado.FechaProcesamiento = DateTime.UtcNow;
+    var id = await periodo.GuardarCalendarioAsync(calendarioConfirmado);
 
-    db.Calendarios.Add(calendarioConfirmado);
-    await db.SaveChangesAsync();
-
-    return Results.Ok(new { mensaje = "¡Calendario guardado exitosamente en Supabase!", id = calendarioConfirmado.Id });
+    return Results.Ok(new { mensaje = "¡Calendario guardado exitosamente en Supabase!", id });
 })
 .WithTags("2. Gestión de Base de Datos")
 .WithSummary("Guarda un calendario verificado")
@@ -258,21 +254,12 @@ app.MapPost("/api/calendarios/confirm", async ([FromBody] CalendarioProcesado ca
 
 
 // ---> ENDPOINT 3: LIMPIAR TODO (PREPARACIÓN NUEVO SEMESTRE)
-app.MapDelete("/api/calendarios/clear-all", async (AppDbContext db) =>
+app.MapDelete("/api/calendarios/clear-all", async (PeriodoAcademicoService periodo) =>
 {
     try
     {
-        // 1. Borramos el historial de PDFs enviados (vital para que el scraper funcione en el nuevo semestre)
-        await db.TrabajosPublicados.ExecuteDeleteAsync();
-
-        // 2. 🚀 SOFT-RESET CRM: En lugar de borrar los estudiantes, vaciamos sus materias inscritas.
-        // Conservamos Nombre, Correo y FechaSuscripcion intactos, y reseteamos cualquier advertencia previa.
-        await db.EstudiantesSuscritos.ExecuteUpdateAsync(setters => setters
-            .SetProperty(e => e.MateriasInscritas, new List<string>())
-            .SetProperty(e => e.FechaAdvertencia, (DateTime?)null));
-
-        // 3. Borramos los calendarios (Si tu DB tiene ON DELETE CASCADE, esto borrará también las Evaluaciones)
-        await db.Calendarios.ExecuteDeleteAsync();
+        // Transaccional: TrabajosPublicados, soft-reset de estudiantes, Evaluaciones y Calendarios
+        await periodo.ReiniciarSemestreAsync();
 
         return Results.Ok(new { mensaje = "¡Nuevo Semestre Listo! Calendarios y publicaciones limpias. Se conservó la base de datos de estudiantes (Suscripciones vaciadas)." });
     }
@@ -486,98 +473,25 @@ app.MapPost("/api/admin/tp/buscar-ahora", async (CatalogoScraperService scraper)
 
 app.MapPost("/api/estudiantes/solicitar-plan", async (
     [FromBody] SolicitudPlanDto solicitud,
-    AppDbContext db,
-    ExcelGeneratorService excelService,
-    EmailService emailService,
-    SuscripcionService suscripcionService) =>
+    PlanEstudianteService planService) =>
 {
-    // 1. Validación inicial
-    if (string.IsNullOrWhiteSpace(solicitud.CodigosMaterias))
-        return Results.BadRequest("Debes proporcionar al menos un código de materia.");
-
-    if (string.IsNullOrWhiteSpace(solicitud.CorreoElectronico))
-        return Results.BadRequest("Debes proporcionar un correo electrónico.");
-
     try
     {
-        // 2. PARSER INDESTRUCTIBLE (compartido con Notion)
-        List<string> listaMaterias = SuscripcionService.ParsearMaterias(solicitud.CodigosMaterias);
-
-        if (!listaMaterias.Any())
-            return Results.BadRequest("El formato de los códigos proporcionados no es válido o está vacío.");
-
-        // 3. Búsqueda en BD
-        var materiasBd = await db.PlanesDeCurso
-            .Include(p => p.MaterialesDeApoyo)
-            .Include(p => p.Evaluaciones)
-            .Where(p => listaMaterias.Contains(p.CodigoMateria))
-            .ToListAsync();
-
-        if (!materiasBd.Any())
-            return Results.NotFound("No se encontraron las materias en el catálogo oficial.");
-
-        // 4. DETECTAR MATERIAS FALTANTES (Teoría de Conjuntos)
-        var codigosEncontrados = materiasBd.Select(m => m.CodigoMateria).ToList();
-        List<string> materiasNoEncontradas = listaMaterias.Except(codigosEncontrados).ToList();
-
-        var listaParaExcel = new List<ExcelGeneratorService.MateriaPlanillaDto>();
-
-        // 5. Mapeo para Excel
-        foreach (var materia in materiasBd)
-        {
-            if (materia.Evaluaciones != null && materia.Evaluaciones.Any())
-            {
-                foreach (var eval in materia.Evaluaciones)
-                {
-                    listaParaExcel.Add(new ExcelGeneratorService.MateriaPlanillaDto
-                    {
-                        Codigo = materia.CodigoMateria,
-                        Nombre = eval.NombreMateria,
-                        TipoEvaluacion = eval.Tipo,
-                        FechaEntrega = eval.FechaEntrega.ToString("dd/MM/yyyy"),
-                        UrlPlan = materia.UrlDocumento,
-                        UrlsMateriales = materia.MaterialesDeApoyo.Select(m => m.UrlDrive).ToList()
-                    });
-                }
-            }
-            else
-            {
-                // Fallback
-                listaParaExcel.Add(new ExcelGeneratorService.MateriaPlanillaDto
-                {
-                    Codigo = materia.CodigoMateria,
-                    Nombre = materia.NombreMateria,
-                    TipoEvaluacion = "Pendiente por definir",
-                    FechaEntrega = "Pendiente",
-                    UrlPlan = materia.UrlDocumento,
-                    UrlsMateriales = materia.MaterialesDeApoyo.Select(m => m.UrlDrive).ToList()
-                });
-            }
-        }
-
-        // 6. Generamos Excel en Memoria
-        var archivoExcelBytes = excelService.GenerarPlanDeEvaluacionExcel(listaParaExcel);
-
-        // 7. Enviamos Correo (¡AHORA PASAMOS LA LISTA DE FALTANTES!)
-        await emailService.EnviarPlanPersonalizadoAsync(
-            solicitud.CorreoElectronico,
-            solicitud.NombreCompleto,
-            archivoExcelBytes,
-            materiasNoEncontradas);
-
-        // 8. Suscribir al estudiante (igual que por Notion) y enviarle los trabajos ya publicados
-        var suscripcion = await suscripcionService.SuscribirAsync(
+        var r = await planService.GenerarYEnviarAsync(
             solicitud.NombreCompleto,
             solicitud.CorreoElectronico,
-            listaMaterias);
+            solicitud.CodigosMaterias);
+
+        if (r.Estado == EstadoPlanEstudiante.Invalido) return Results.BadRequest(r.Error);
+        if (r.Estado == EstadoPlanEstudiante.NoEncontrado) return Results.NotFound(r.Error);
 
         return Results.Ok(new
         {
             mensaje = $"¡Plan generado! Se ha enviado el Excel a {solicitud.CorreoElectronico}",
             suscrito = true,
-            suscripcionNueva = suscripcion.EsNuevo,
-            trabajosYaPublicadosEnviados = suscripcion.TrabajosEnviados,
-            errorTrabajosPublicados = suscripcion.ErrorEnvioTrabajos
+            suscripcionNueva = r.Suscripcion!.EsNuevo,
+            trabajosYaPublicadosEnviados = r.Suscripcion.TrabajosEnviados,
+            errorTrabajosPublicados = r.Suscripcion.ErrorEnvioTrabajos
         });
     }
     catch (Exception ex)
@@ -650,27 +564,32 @@ app.MapGet("/api/ping", () => Results.Ok(new { mensaje = "API Despierta y lista"
 // ========================================================================
 
 // ---> ENDPOINT CRM 1: ENVIAR CONVOCATORIA DE INICIO DE SEMESTRE
-app.MapPost("/api/admin/crm/convocatoria-semestre", async (AppDbContext db, EmailService emailService) =>
+app.MapPost("/api/admin/crm/convocatoria-semestre", async (PeriodoAcademicoService periodo) =>
 {
     try
     {
-        // Obtenemos todos los estudiantes que tienen sus materias limpias (Listas para el nuevo periodo)
-        var estudiantesAConsultar = await db.EstudiantesSuscritos
-            .Where(e => e.MateriasInscritas.Count == 0)
-            .ToListAsync();
+        var resultado = await periodo.EnviarConvocatoriaAsync();
 
-        if (!estudiantesAConsultar.Any())
-            return Results.Ok(new { mensaje = "No se encontraron estudiantes con suscripciones vacías para notificar en este periodo." });
+        if (resultado.Motivo == MotivoFinConvocatoria.YaEnCurso)
+            return Results.Conflict(new { mensaje = resultado.Detalle });
 
-        // Disparamos el motor masivo balanceado
-        var resultado = await emailService.EnviarConvocatoriaNuevoSemestreMasivoAsync(estudiantesAConsultar);
+        if (resultado.Motivo == MotivoFinConvocatoria.NadaPendiente)
+            return Results.Ok(new { mensaje = "No hay estudiantes pendientes de recibir la convocatoria en este periodo." });
 
         return Results.Ok(new
         {
-            mensaje = "Proceso de broadcast completado con éxito.",
-            totalEstudiantesProcesados = estudiantesAConsultar.Count,
-            enviosExitosos = resultado.exitosos,
-            enviosFallidos = resultado.fallidos
+            mensaje = resultado.Motivo == MotivoFinConvocatoria.Completada
+                ? "Convocatoria completada: todos los pendientes la recibieron."
+                : "Lote enviado. El resto se envía solo cuando se libere cupo (ConvocatoriaWorkerService).",
+            motivo = resultado.Motivo.ToString(),
+            pendientesAntes = resultado.PendientesAntes,
+            enviosExitosos = resultado.Exitosos,
+            enviosFallidos = resultado.Fallidos,
+            pendientes = resultado.Restantes,
+            enviadosUltimas24h = resultado.EnviadosUltimas24h,
+            limiteDiario = resultado.LimiteDiario,
+            proximoCupoUtc = resultado.ProximoCupoUtc,
+            detalle = resultado.Detalle
         });
     }
     catch (Exception ex)
@@ -680,7 +599,7 @@ app.MapPost("/api/admin/crm/convocatoria-semestre", async (AppDbContext db, Emai
 })
 .WithTags("6. Panel de Administración - CRM")
 .WithSummary("1. Enviar aviso masivo de nuevo semestre")
-.WithDescription("Extrae a todos los estudiantes de la base de datos cuyas materias fueron vaciadas y les envía un correo masivo, notificándoles que ya pueden solicitar sus nuevos planes.");
+.WithDescription("Envía la convocatoria a los estudiantes con materias vacías que aún no la recibieron (FechaConvocatoria nula), con un tope de Crm:LimiteDiarioConvocatoria (350 por defecto) cada 24 h. Cada envío queda marcado, así que relanzarlo nunca duplica correos; lo que no quepa lo reanuda el ConvocatoriaWorkerService.");
 
 
 // ---> ENDPOINT CRM 2: PROCESAR ADVERTENCIAS DE INACTIVIDAD (EL ULTIMÁTUM)
@@ -789,18 +708,32 @@ app.MapPost("/api/telegram/webhook", async (
     Microsoft.Extensions.Caching.Memory.IMemoryCache cache,
     IConfiguration config) =>
 {
-    // A. Mensaje de Texto (Botones del Teclado Inferior)
-    if (update.Message != null && !string.IsNullOrEmpty(update.Message.Text))
+    // 0. Telegram reintenta el mismo update si no recibe 200 a tiempo: lo procesamos UNA sola vez
+    //    (evita, por ejemplo, disparar dos veces el reinicio de semestre)
+    var claveUpdate = $"tg-update:{update.Id}";
+    if (cache.TryGetValue(claveUpdate, out _)) return Results.Ok();
+    cache.Set(claveUpdate, true, TimeSpan.FromMinutes(10));
+
+    // A. Mensajes: botones del teclado inferior, respuestas del panel (PIN, datos) o PDF
+    if (update.Message != null)
     {
-        await telegramService.ProcesarComandoTecladoAsync(
-            update.Message.Chat.Id,
-            update.Message.Text
-        );
+        await telegramService.ProcesarMensajeAsync(update.Message);
     }
 
-    // B. Click en Botón Interactivo (Callback Query de logs)
+    // B. Click en Botón Interactivo
     if (update.CallbackQuery != null)
     {
+        // B.1 Botones del panel de Periodo Académico (prefijo "pa:")
+        if (TelegramControlService.EsCallbackDelPanel(update.CallbackQuery.Data))
+        {
+            await telegramService.ProcesarCallbackAsync(update.CallbackQuery);
+            return Results.Ok();
+        }
+
+        // B.2 Detalles de logs: solo administradores
+        if (!telegramService.EsAdmin(update.CallbackQuery.From.Id))
+            return Results.Ok();
+
         var callbackId = update.CallbackQuery.Data;
         Console.WriteLine($"[Webhook] Botón presionado con ID: {callbackId}");
         

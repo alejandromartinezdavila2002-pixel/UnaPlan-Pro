@@ -24,4 +24,9 @@ public class EstudiantesSuscritos
     // NUEVA COLUMNA CRM: Registra la fecha del ultimátum (15 días). 
     // Es Nullable (DateTime?) porque los estudiantes activos no tendrán advertencias pendientes.
     public DateTime? FechaAdvertencia { get; set; }
+
+    // CRM: cuándo recibió la convocatoria del periodo actual. Null = pendiente.
+    // El reinicio de semestre la vuelve a null; permite reanudar la convocatoria
+    // al día siguiente sin reenviársela a quien ya la recibió.
+    public DateTime? FechaConvocatoria { get; set; }
 }
