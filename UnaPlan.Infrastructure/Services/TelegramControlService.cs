@@ -255,8 +255,6 @@ public class TelegramControlService
     private const string CbEnviarConvocatoria = "pa:conv-enviar";
 
     private static readonly TimeSpan DuracionSesion = TimeSpan.FromMinutes(10);
-    private static readonly TimeSpan DuracionBloqueoPin = TimeSpan.FromMinutes(15);
-    private const int MaxIntentosPin = 3;
     private const long MaxBytesPdf = 20L * 1024 * 1024; // Límite de descarga de la Bot API
 
     private static readonly Regex CorreoRegex = new(@"^[^@\s]+@[^@\s]+\.[^@\s]+$", RegexOptions.Compiled);
@@ -278,15 +276,8 @@ public class TelegramControlService
         public string Codigos { get; set; } = "";
     }
 
-    private sealed class ControlPin
-    {
-        public int Fallos;
-        public DateTime? BloqueadoHasta;
-    }
-
     // En memoria: si Render reinicia, la sesión se pierde y basta con empezar de nuevo
     private readonly ConcurrentDictionary<long, SesionPanel> _sesiones = new();
-    private readonly ConcurrentDictionary<long, ControlPin> _controlPin = new();
 
     public static bool EsCallbackDelPanel(string? data) =>
         data != null && data.StartsWith(PrefijoPanel, StringComparison.Ordinal);
@@ -479,31 +470,10 @@ public class TelegramControlService
             return;
         }
 
-        if (PinBloqueado(chatId, out var minutos))
-        {
-            await EnviarSeguroAsync(chatId, $"🔒 Demasiados intentos fallidos. Intenta de nuevo en {minutos} min.");
-            return;
-        }
-
         NuevaSesion(chatId, PasoPanel.EsperandoPin);
         await EnviarSeguroAsync(chatId,
             "🔐 <b>Iniciar nuevo periodo académico</b>\n\nEscribe el <b>PIN</b> de seguridad.\n<i>Tu mensaje con el PIN se borrará del chat.</i>",
             BotonesCancelar());
-    }
-
-    private bool PinBloqueado(long chatId, out int minutosRestantes)
-    {
-        minutosRestantes = 0;
-        if (!_controlPin.TryGetValue(chatId, out var c) || c.BloqueadoHasta is not { } hasta) return false;
-
-        if (hasta > DateTime.UtcNow)
-        {
-            minutosRestantes = (int)Math.Ceiling((hasta - DateTime.UtcNow).TotalMinutes);
-            return true;
-        }
-
-        _controlPin.TryRemove(chatId, out _);
-        return false;
     }
 
     private async Task ValidarPinAsync(long chatId, int messageId, string texto, SesionPanel sesion)
@@ -516,7 +486,6 @@ public class TelegramControlService
 
         if (correcto)
         {
-            _controlPin.TryRemove(chatId, out _);
             sesion.Paso = PasoPanel.EsperandoPdf;
             await EnviarSeguroAsync(chatId,
                 "✅ PIN correcto.\n\n📎 Ahora envía el <b>PDF del calendario</b> del nuevo periodo (como archivo).",
@@ -524,20 +493,8 @@ public class TelegramControlService
             return;
         }
 
-        var control = _controlPin.GetOrAdd(chatId, _ => new ControlPin());
-        control.Fallos++;
-
-        if (control.Fallos >= MaxIntentosPin)
-        {
-            control.Fallos = 0;
-            control.BloqueadoHasta = DateTime.UtcNow.Add(DuracionBloqueoPin);
-            TerminarSesion(chatId, sesion);
-            _logger.LogWarning($"[Periodo] PIN incorrecto {MaxIntentosPin} veces desde el chat {chatId}. Panel bloqueado {DuracionBloqueoPin.TotalMinutes} min.");
-            await EnviarSeguroAsync(chatId, $"🔒 PIN incorrecto. El panel queda bloqueado por {DuracionBloqueoPin.TotalMinutes} minutos.");
-            return;
-        }
-
-        await EnviarSeguroAsync(chatId, $"❌ PIN incorrecto. Te quedan {MaxIntentosPin - control.Fallos} intento(s).", BotonesCancelar());
+        // Sin límite de intentos: se queda esperando el PIN hasta acertar, cancelar o que expire la sesión
+        await EnviarSeguroAsync(chatId, "❌ PIN incorrecto. Escríbelo de nuevo.", BotonesCancelar());
     }
 
     // ========================================================================

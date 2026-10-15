@@ -56,7 +56,7 @@ Sin tablas nuevas en Supabase: el PIN vive en una variable de entorno.
 ### Fase 4 — Flujo "Iniciar nuevo periodo" ✅
 ```
 [🎓 Periodo Académico] → 🚀 Iniciar nuevo periodo | 📝 Generar plan a estudiante | ❌ Cerrar
-🚀 → PIN (se borra el mensaje; 3 intentos fallidos = bloqueo 15 min)
+🚀 → PIN (se borra el mensaje; sin límite de intentos)
    → PDF → Resumen (materias, evaluaciones TP/TSP, rango de fechas, códigos omitidos, estudiantes afectados)
    → [✅ Confirmar reinicio] [❌ Cancelar]   (doble toque = una sola ejecución)
    → Transacción limpiar + cargar → Convocatoria en segundo plano → Reporte final
@@ -87,7 +87,7 @@ Sin tablas nuevas en Supabase: el PIN vive en una variable de entorno.
 - [x] `dotnet build` sin errores.
 - [ ] Swagger: los endpoints responden igual que antes.
 - [ ] Telegram con el PDF del semestre pasado:
-  - [ ] PIN incorrecto (y bloqueo al 3er intento)
+  - [ ] PIN incorrecto (pide de nuevo, sin bloqueo)
   - [ ] Archivo que no es PDF / PDF con 0 evaluaciones
   - [ ] Cancelar a mitad de flujo
   - [ ] Doble toque en "Confirmar"
