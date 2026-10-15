@@ -8,7 +8,7 @@ using Microsoft.EntityFrameworkCore;
 
 using Telegram.Bot;
 using Microsoft.Extensions.Configuration;
-using System.IO; // <--- AGREGAR ESTO PARA EL MEMORYSTREAM
+using System.IO;
 
 namespace UnaPlan.Infrastructure.Services;
 
@@ -46,6 +46,8 @@ public class CatalogoScraperService
         { "7", "1vo6hFbJr7Hafqs5BSwJoq-rAoX0HbuU1" }  // 700-799
     };
 
+
+    // Carpetas de Drive donde están los TP, indexadas por el primer dígito del código de materia
     public static readonly Dictionary<string, string> CarpetasTp = new()
     {
         { "0", "1zSmylBd2L3lXW-8Ttgrw8p56Q4xaR6IX" }, // 000-099
@@ -309,6 +311,24 @@ public class CatalogoScraperService
         // Los materiales primero (son hijos de PlanesDeCurso por FK)
         await _db.MaterialesDeApoyo.ExecuteDeleteAsync();
         await _db.PlanesDeCurso.ExecuteDeleteAsync();
+    }
+
+    // Vuelve a escanear Drive y reemplaza el catálogo completo (planes + materiales) con lo que haya ahora.
+    // Lo usa el flujo de "Iniciar nuevo periodo": cada semestre la universidad puede subir planes y
+    // materiales nuevos o mover los viejos, así que mejor reconstruir todo en vez de ir acumulando.
+    public async Task<ResultadoActualizacionCatalogo> ActualizarCatalogoCompletoAsync()
+    {
+        var catalogoNuevo = await GenerarVistaPreviaMasivaAsync();
+
+        await LimpiarTodoElCatalogoAsync();
+        await GuardarCatalogoEnBaseDeDatosAsync(catalogoNuevo);
+
+        return new ResultadoActualizacionCatalogo
+        {
+            TotalMaterias = catalogoNuevo.Count,
+            MateriasConPlan = catalogoNuevo.Count(m => !string.IsNullOrEmpty(m.UrlPlanCurso)),
+            TotalMateriales = catalogoNuevo.Sum(m => m.Materiales.Count)
+        };
     }
 
 
@@ -587,4 +607,12 @@ public class ResultadoEscaneoTp
     public int AlertasEnviadas { get; set; }
     public List<string> Encontrados { get; set; } = new();
     public List<string> SiguenPendientes { get; set; } = new();
+}
+
+// Resultado de reconstruir el catálogo completo desde Drive
+public class ResultadoActualizacionCatalogo
+{
+    public int TotalMaterias { get; set; }
+    public int MateriasConPlan { get; set; }
+    public int TotalMateriales { get; set; }
 }

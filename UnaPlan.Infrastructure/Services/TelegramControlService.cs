@@ -599,7 +599,10 @@ public class TelegramControlService
         sb.AppendLine("• Borrar calendario, evaluaciones y TPs publicados del periodo actual");
         sb.AppendLine($"• Vaciar las materias de {totalEstudiantes} estudiante(s) (se conservan sus datos)");
         sb.AppendLine("• Cargar este calendario");
-        sb.AppendLine("Después se envía la convocatoria por correo (por lotes con tope cada 24 h; lo que no quepa sigue sola).");
+        sb.AppendLine();
+        sb.AppendLine("Después se vuelve a escanear Drive para refrescar los planes de curso y materiales de apoyo " +
+                      "(por si la universidad subió o movió algo de un semestre al otro), y se envía la convocatoria " +
+                      "por correo (por lotes con tope cada 24 h; lo que no quepa sigue sola).");
         sb.AppendLine();
         sb.AppendLine("<i>Esta acción no se puede deshacer.</i>");
         return sb.ToString();
@@ -653,6 +656,23 @@ public class TelegramControlService
                     return;
                 }
 
+                // Catálogo (el periodo ya quedó cargado aunque esto falle; no revierte nada)
+                await EnviarSeguroAsync(chatId, "📚 Actualizando planes de curso y materiales de apoyo desde Drive...");
+                try
+                {
+                    using var scope = _scopeFactory.CreateScope();
+                    var scraper = scope.ServiceProvider.GetRequiredService<CatalogoScraperService>();
+                    var catalogo = await scraper.ActualizarCatalogoCompletoAsync();
+                    await EnviarSeguroAsync(chatId, FormatearResultadoCatalogo(catalogo));
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "[Periodo] Error actualizando el catálogo desde Drive.");
+                    await EnviarSeguroAsync(chatId,
+                        $"⚠️ <b>El periodo se cargó, pero no se pudo actualizar el catálogo:</b> {Html(ex.GetBaseException().Message)}\n" +
+                        "El catálogo anterior sigue intacto; puedes reintentarlo desde el panel de administración.");
+                }
+
                 // Convocatoria masiva (el periodo ya quedó cargado aunque esto falle)
                 await EnviarSeguroAsync(chatId, "📣 Enviando la convocatoria a los estudiantes...\n<i>Puede tardar unos minutos.</i>");
                 try
@@ -690,6 +710,12 @@ public class TelegramControlService
             sb.AppendLine($"⚠️ Omitidas {r.EvaluacionesOmitidas} evaluación(es) de códigos fuera del catálogo: <code>{Html(string.Join(", ", r.CodigosOmitidos))}</code>");
 
         return sb.ToString();
+    }
+
+    private static string FormatearResultadoCatalogo(ResultadoActualizacionCatalogo r)
+    {
+        return $"📚 <b>Catálogo actualizado</b>\n" +
+               $"{r.TotalMaterias} materia(s) en Drive · {r.MateriasConPlan} con plan de curso · {r.TotalMateriales} material(es) de apoyo";
     }
 
     public static string FormatearResultadoConvocatoria(ResultadoConvocatoria r, bool esReanudacion = false)
