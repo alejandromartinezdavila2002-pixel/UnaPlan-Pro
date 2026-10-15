@@ -287,7 +287,7 @@ public class EmailService
                         <p>Un nuevo ciclo académico ha comenzado. En <b>UnaPlan</b> hemos reiniciado y limpiado el registro de asignaturas para dejar tu cuenta totalmente optimizada para este semestre.</p>
                         <p>Ya puedes ingresar a la plataforma, registrar las nuevas materias que vas a cursar y descargar tu <strong>Plan de Evaluación Personalizado en Excel</strong> con las fechas actualizadas de la universidad.</p>
                         <div style='text-align: center; margin: 30px 0;'>
-                            <a href='https://www.notion.so/Centro-de-Planificaci-n-Estudiantil-UnaPlan-34c4142f3a3e800bb16ec8afb6314b63?source=copy_link' style='background-color: #0056b3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;'>🌐 Ir al Plan e Inscribir Materias</a>
+                            <a href='https://receptive-freighter-a6f.notion.site/Centro-de-Planificaci-n-Estudiantil-UnaPlan-34c4142f3a3e800bb16ec8afb6314b63' style='background-color: #0056b3; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold; font-size: 16px;'>🌐 Ir al Plan e Inscribir Materias</a>
                         </div>
                         <p style='font-size: 12px; color: #777; text-align: center;'>Recuerda mantener tus materias al día para recibir las alertas en tiempo real de TP y TSP directamente en tu bandeja de entrada.</p>
                     </div>

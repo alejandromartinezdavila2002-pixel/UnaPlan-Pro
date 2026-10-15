@@ -19,17 +19,23 @@ public class NotionPublisherService : BackgroundService
     private readonly IConfiguration _config;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<NotionPublisherService> _logger;
+    private readonly TelegramLogDispatcher _logDispatcher;
 
     // Memoria para evitar publicaciones duplicadas el mismo lunes
     private int _ultimoDiaRevisado = -1;
     private bool _yaSePublicoEstaSemana = false;
 
-    public NotionPublisherService(INotionClient notionClient, IConfiguration config, IServiceScopeFactory scopeFactory, ILogger<NotionPublisherService> logger)
+    // Si la Cartelera activa llega a esta cantidad de entradas, avisamos por Telegram
+    // antes de que Notion agote el cupo de bloques gratuito del workspace.
+    private const int UmbralAlertaBloques = 150;
+
+    public NotionPublisherService(INotionClient notionClient, IConfiguration config, IServiceScopeFactory scopeFactory, ILogger<NotionPublisherService> logger, TelegramLogDispatcher logDispatcher)
     {
         _notionClient = notionClient;
         _config = config;
         _scopeFactory = scopeFactory;
         _logger = logger;
+        _logDispatcher = logDispatcher;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -95,6 +101,10 @@ public class NotionPublisherService : BackgroundService
 
         try
         {
+            // Antes de publicar lo nuevo, archivamos en Notion lo que ya pasó. Así la tabla activa
+            // no crece para siempre y no volvemos a agotar el cupo de bloques del plan gratuito.
+            await LimpiarEntradasPasadasAsync(databaseId);
+
             DateTime hoy = DateTime.UtcNow.Date;
             int diasHastaSabado = ((int)DayOfWeek.Saturday - (int)hoy.DayOfWeek + 7) % 7;
 
@@ -172,11 +182,81 @@ public class NotionPublisherService : BackgroundService
                 await Task.Delay(400);
             }
 
+            await AlertarSiCarteleraCrecioDemasiadoAsync(databaseId);
+
             _logger.LogInformation("✅ Sincronización de la cartelera completada.");
         }
         catch (Exception ex)
         {
             _logger.LogError($"❌ Error sincronizando la cartelera: {ex.Message}");
+        }
+    }
+
+    // Archiva en Notion (las manda a la papelera) las entradas de la Cartelera cuya fecha ya pasó.
+    // Notion vacía la papelera solo pasados 30 días, pero esto evita que la tabla activa que cuenta
+    // para el límite de bloques siga creciendo cada semana sin control.
+    private async Task LimpiarEntradasPasadasAsync(string databaseId)
+    {
+        DateTime hoy = DateTime.UtcNow.Date;
+        int archivadas = 0;
+        string? cursor = null;
+
+        do
+        {
+            var queryParams = new DatabasesQueryParameters
+            {
+                Filter = new DateFilter("Fecha de Entrega o Publicación", before: hoy),
+                StartCursor = cursor
+            };
+
+            var response = await _notionClient.Databases.QueryAsync(databaseId, queryParams);
+
+            foreach (var page in response.Results.OfType<Page>())
+            {
+                try
+                {
+                    await _notionClient.Pages.UpdateAsync(page.Id, new PagesUpdateParameters { InTrash = true });
+                    archivadas++;
+                    await Task.Delay(350);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError($"❌ No se pudo archivar la entrada {page.Id} de la Cartelera: {ex.Message}");
+                }
+            }
+
+            cursor = response.HasMore ? response.NextCursor : null;
+        }
+        while (cursor != null);
+
+        if (archivadas > 0)
+        {
+            _logger.LogInformation($"🧹 Se archivaron {archivadas} entradas vencidas de la Cartelera.");
+        }
+    }
+
+    // Si la Cartelera activa crece demasiado, avisamos por Telegram antes de que Notion
+    // bloquee de sorpresa el workspace por falta de bloques.
+    private async Task AlertarSiCarteleraCrecioDemasiadoAsync(string databaseId)
+    {
+        int total = 0;
+        string? cursor = null;
+
+        do
+        {
+            var queryParams = new DatabasesQueryParameters { StartCursor = cursor };
+            var response = await _notionClient.Databases.QueryAsync(databaseId, queryParams);
+            total += response.Results.Count;
+            cursor = response.HasMore ? response.NextCursor : null;
+        }
+        while (cursor != null);
+
+        if (total >= UmbralAlertaBloques)
+        {
+            _logDispatcher.EnqueueLog(
+                $"⚠️ <b>Cartelera de Evaluaciones</b> tiene {total} entradas activas en Notion. " +
+                "Si sigue creciendo así puede volver a agotar el plan gratuito de bloques. Revisa la papelera de Notion o considera vaciarla.",
+                bypassLiveMode: true);
         }
     }
 }
