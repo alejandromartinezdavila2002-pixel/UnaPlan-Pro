@@ -20,11 +20,10 @@ public class ExcelGeneratorService
         using var workbook = new XLWorkbook();
         var worksheet = workbook.Worksheets.Add("Mi Plan UNA");
 
-        // --- 1. CONFIGURACIÓN DE VISTA (ZOOM) ---
         worksheet.SheetView.ZoomScale = 135;
         worksheet.Style.Alignment.SetVertical(XLAlignmentVerticalValues.Center);
 
-        // --- 2. ENCABEZADO MAESTRO (FILA 1) ---
+        // Encabezado principal (fila 1)
         worksheet.Row(1).Height = 45;
         worksheet.Cell("A1").Value = "PLAN DE EVALUACIÓN PERSONALIZADO - UNA";
         var tituloMaestro = worksheet.Range("A1:H1");
@@ -35,7 +34,7 @@ public class ExcelGeneratorService
             .Fill.SetBackgroundColor(XLColor.FromHtml("#1e293b"))
             .Alignment.SetHorizontal(XLAlignmentHorizontalValues.Center);
 
-        // --- 3. LABELS PRINCIPALES DE SECCIÓN (FILA 2) ---
+        // Labels de sección (fila 2)
         worksheet.Row(2).Height = 30;
 
         // Label Tabla 1 (Izquierda)
@@ -59,7 +58,7 @@ public class ExcelGeneratorService
             .Border.OutsideBorder = XLBorderStyleValues.Medium;
 
 
-        // --- 4. CABECERAS DE COLUMNAS SIMÉTRICAS (FILA 4) ---
+        // Cabeceras de columnas (fila 4)
         worksheet.Row(3).Height = 10;
         int filaInicioDatos = 5;
 
@@ -90,7 +89,7 @@ public class ExcelGeneratorService
         }
 
 
-        // --- 5. CONSTRUIR TABLA PRINCIPAL (IZQUIERDA) ---
+        // Tabla principal (izquierda)
         int filaActual = filaInicioDatos;
         var gruposPorMateria = materias.GroupBy(m => m.Codigo);
 
@@ -129,7 +128,7 @@ public class ExcelGeneratorService
         }
 
 
-        // --- 6. CONSTRUIR TABLA RECURSOS (DERECHA) ---
+        // Tabla de recursos (derecha)
         int filaRecursos = filaInicioDatos;
 
         foreach (var mat in materias.DistinctBy(m => m.Codigo))
@@ -159,7 +158,7 @@ public class ExcelGeneratorService
         }
 
 
-        // --- 7. AJUSTES FINALES Y SIMETRÍA ---
+        // Ajustes finales para que las dos tablas queden parejas
         int ultimaFilaGlobal = Math.Max(filaActual - 1, filaRecursos - 1);
 
         var panelRecursos = worksheet.Range(4, 6, ultimaFilaGlobal, 8);
@@ -173,8 +172,7 @@ public class ExcelGeneratorService
             worksheet.Range(filaInicioDatos, 6, filaRecursos - 1, 8).Style.Border.InsideBorderColor = XLColor.FromHtml("#e2e8f0");
         }
 
-        // --- ¡LA SOLUCIÓN PARA GOOGLE SHEETS! Anchos explícitos ---
-
+        // Anchos explícitos: Google Sheets no los calcula solo como Excel
         // Tabla Izquierda
         worksheet.Column(1).Width = 12; // CÓDIGO
         worksheet.Column(2).Width = 45; // MATERIA (Súper ancha para nombres largos)

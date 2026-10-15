@@ -7,10 +7,10 @@ public class TelegramLoggerOptions
 {
     public string BotToken { get; set; } = string.Empty;
 
-    // Cambiamos ChatId individual por una lista de Admins
+    // Lista de admins en vez de un solo ChatId
     public List<long> AdminChatIds { get; set; } = new();
 
-    // Necesario para que el bot sepa dónde registrar su Webhook
+    // URL donde el bot registra su webhook
     public string RenderUrl { get; set; } = string.Empty;
 
     public LogLevel MinimumLevel { get; set; } = LogLevel.Warning;

@@ -22,9 +22,7 @@ public class EmailService
     private readonly GmailService _gmailService;
     private readonly ILogger<EmailService> _logger;
 
-    // =========================================================================
-    // 🛡️ MEMORIA DEL GUARDIÁN: Control de límite diario
-    // =========================================================================
+    // Contador del guardián de límite diario
     private static int _correosEnviadosHoy = 0;
     private static DateTime _fechaUltimoEnvio = DateTime.Today;
     private const int LIMITE_DIARIO_SEGURO = 450; // Dejamos 50 de margen para el límite de 500 de Google
@@ -36,9 +34,6 @@ public class EmailService
         _logger = logger;
     }
 
-    // =========================================================================
-    // 🛡️ MÉTODO GUARDIÁN: Verifica el límite antes de enviar
-    // =========================================================================
     private void VerificarYRegistrarEnvio()
     {
         // Si cambió el día desde el último envío, reseteamos el contador
@@ -48,19 +43,15 @@ public class EmailService
             _fechaUltimoEnvio = DateTime.Today;
         }
 
-        // Verificamos si ya alcanzamos el límite seguro
         if (_correosEnviadosHoy >= LIMITE_DIARIO_SEGURO)
         {
             throw new InvalidOperationException($"Límite diario de seguridad de {LIMITE_DIARIO_SEGURO} correos alcanzado. Por favor, reanude los envíos masivos mañana.");
         }
 
-        // Registramos que estamos a punto de enviar un correo más
         _correosEnviadosHoy++;
     }
 
-    // =========================================================================
-    // 🚀 MOTOR CENTRAL: Se encarga de la autorización OAuth2 y el envío HTTP
-    // =========================================================================
+    // Versión vieja, antes de pasar el GmailService a Singleton (queda por si hay que volver atrás)
     //private async Task EnviarConGmailApiAsync(MimeMessage email)
     //{
     //    // 1. Configuramos las credenciales extraídas de tu secrets.json (o variables de entorno en Render)
@@ -102,12 +93,9 @@ public class EmailService
     //}
 
 
-    // =========================================================================
-    // 🚀 MOTOR CENTRAL OPTIMIZADO (Consumiendo el Singleton)
-    // =========================================================================
     private async Task EnviarConGmailApiAsync(MimeMessage email)
     {
-        // 1. Convertimos el correo a Base64Url (El estándar RFC 2822)
+        // Base64Url, que es lo que pide RFC 2822
         using var memoryStream = new MemoryStream();
         await email.WriteToAsync(memoryStream);
 
@@ -118,12 +106,10 @@ public class EmailService
 
         var message = new Google.Apis.Gmail.v1.Data.Message { Raw = base64Url };
 
-        // 2. Disparamos usando el motor global con un límite resiliente de 15 segundos
+        // 15 segundos de margen; si Gmail no responde en ese tiempo, mejor que falle y se reintente
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         await _gmailService.Users.Messages.Send(message, "me").ExecuteAsync(cts.Token);
     }
-
-    // =========================================================================
 
     public async Task EnviarPlanPersonalizadoAsync(string correoDestino, string nombreEstudiante, byte[] archivoExcel, List<string> materiasFaltantes)
     {
@@ -205,9 +191,7 @@ public class EmailService
         await EnviarConGmailApiAsync(email);
     }
 
-    // =========================================================================
-    // 📚 Ponerse al día: trabajos que ya estaban publicados al momento de suscribirse
-    // =========================================================================
+    // Trabajos que ya estaban publicados cuando el estudiante se suscribió, para que no se los pierda
     public async Task EnviarTrabajosYaPublicadosAsync(string destinatario, string nombreEstudiante, List<TrabajoParaCorreo> trabajos)
     {
         var email = new MimeMessage();
@@ -244,9 +228,7 @@ public class EmailService
         await EnviarConGmailApiAsync(email);
     }
 
-    // =========================================================================
-    // 🔔 CRM: Alerta de Inactividad Semestral
-    // =========================================================================
+    // Aviso de que la cuenta lleva el semestre sin materias registradas
     public async Task EnviarCorreoAdvertenciaInactividadAsync(EstudiantesSuscritos estudiante)
     {
         var email = new MimeMessage();
@@ -279,21 +261,13 @@ public class EmailService
 
         email.Body = builder.ToMessageBody();
 
-        // 🛡️ Aseguramos que los envíos masivos del CRM queden registrados en el contador diario
         VerificarYRegistrarEnvio();
-
-        // 🚀 Despachamos usando el motor central OAuth2 sin parámetros extra superfluos
         await EnviarConGmailApiAsync(email);
     }
 
-
-
-    // =========================================================================
-    // 🔔 CRM: Convocatoria de Nuevo Semestre (UN estudiante)
-    // El lote — tope diario, reanudación y marca FechaConvocatoria — lo orquesta
-    // PeriodoAcademicoService.EnviarConvocatoriaAsync.
-    // Lanza InvalidOperationException si el guardián del límite diario corta el envío.
-    // =========================================================================
+    // Convocatoria a UN estudiante; el lote (tope diario, reanudación, marca FechaConvocatoria)
+    // lo maneja PeriodoAcademicoService.EnviarConvocatoriaAsync. Lanza InvalidOperationException
+    // si el guardián del límite diario corta el envío.
     public async Task EnviarConvocatoriaNuevoSemestreAsync(EstudiantesSuscritos estudiante)
     {
         var email = new MimeMessage();
@@ -321,17 +295,12 @@ public class EmailService
         };
         email.Body = builder.ToMessageBody();
 
-        // 🛡️ Guardián de seguridad: Verifica el límite diario antes de procesar
         VerificarYRegistrarEnvio();
-
-        // 🚀 Envío individual a través de Gmail API
         await EnviarConGmailApiAsync(email);
     }
 
-    // =========================================================================
     // ¿Gmail rechazó el envío porque se agotó la cuota? (429, o 403 con razón de límite)
-    // En ese caso hay que detener el lote: los siguientes también fallarían.
-    // =========================================================================
+    // Si pasó esto, hay que detener el lote: los siguientes también van a fallar.
     public static bool EsCuotaGmailAgotada(Exception ex)
     {
         if (ex is not Google.GoogleApiException g) return false;

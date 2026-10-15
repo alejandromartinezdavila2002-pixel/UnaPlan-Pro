@@ -59,11 +59,9 @@ public class EstadoConvocatoria
     public bool EnCurso { get; set; }
 }
 
-// ========================================================================
 // Punto único del ciclo de periodo académico. Lo usan los endpoints de
 // /api/calendarios/*, /api/admin/crm/convocatoria-semestre, el panel de Telegram
 // y el ConvocatoriaWorkerService (reanudación diaria).
-// ========================================================================
 public class PeriodoAcademicoService
 {
     // Estáticos porque el servicio es Scoped: el candado debe ser uno para toda la app
@@ -99,7 +97,7 @@ public class PeriodoAcademicoService
         _limiteDiarioConvocatoria = limite > 0 ? limite : LimiteDiarioPorDefecto;
     }
 
-    // ---------------- 1. EXTRAER (no toca la base de datos) ----------------
+    // Solo parsea el PDF, no toca la base de datos
     public CalendarioProcesado ExtraerCalendario(Stream pdf, string nombreArchivo)
     {
         var calendario = _extractor.ProcesarCalendarioPdf(pdf, nombreArchivo);
@@ -126,7 +124,7 @@ public class PeriodoAcademicoService
 
     public Task<int> ContarEstudiantesAsync() => _db.EstudiantesSuscritos.CountAsync();
 
-    // ---------------- 2. LIMPIAR (endpoint clear-all) ----------------
+    // Endpoint clear-all
     public async Task<ResultadoLimpieza> ReiniciarSemestreAsync()
     {
         if (!await CandadoReinicio.WaitAsync(0))
@@ -145,7 +143,7 @@ public class PeriodoAcademicoService
         }
     }
 
-    // ---------------- 3. GUARDAR (endpoint confirm) ----------------
+    // Endpoint confirm
     public async Task<int> GuardarCalendarioAsync(CalendarioProcesado calendario)
     {
         calendario.FechaProcesamiento = DateTime.UtcNow;
@@ -154,7 +152,7 @@ public class PeriodoAcademicoService
         return calendario.Id;
     }
 
-    // ---------------- 4. LIMPIAR + GUARDAR ATÓMICO (panel de Telegram) ----------------
+    // Limpia y carga el calendario nuevo en una sola transacción: lo usa el panel de Telegram
     public async Task<ResultadoCargaPeriodo> ReiniciarYCargarAsync(CalendarioProcesado calendario)
     {
         if (!await CandadoReinicio.WaitAsync(0))
@@ -216,20 +214,18 @@ public class PeriodoAcademicoService
     {
         var r = new ResultadoLimpieza();
 
-        // 1. Historial de PDFs enviados (vital para que el scraper funcione en el nuevo semestre)
+        // Historial de PDFs enviados: lo necesita el scraper para no repetirse en el nuevo semestre
         r.TrabajosBorrados = await _db.TrabajosPublicados.ExecuteDeleteAsync();
 
-        // 2. SOFT-RESET CRM: se conservan los estudiantes; se vacían sus materias, la advertencia
-        //    y la marca de convocatoria (todos quedan pendientes de la convocatoria del nuevo periodo)
+        // No borramos a los estudiantes, solo los dejamos "en blanco": sin materias, sin advertencia
+        // y sin marca de convocatoria (quedan pendientes de la convocatoria del nuevo periodo)
         r.EstudiantesReseteados = await _db.EstudiantesSuscritos.ExecuteUpdateAsync(setters => setters
             .SetProperty(e => e.MateriasInscritas, new List<string>())
             .SetProperty(e => e.FechaAdvertencia, (DateTime?)null)
             .SetProperty(e => e.FechaConvocatoria, (DateTime?)null));
 
-        // 3. Evaluaciones explícitas (no dependemos de un ON DELETE CASCADE en la BD)
+        // Esto no depende de un ON DELETE CASCADE en la BD, lo borramos a mano
         r.EvaluacionesBorradas = await _db.Evaluaciones.ExecuteDeleteAsync();
-
-        // 4. Calendarios
         r.CalendariosBorrados = await _db.Calendarios.ExecuteDeleteAsync();
 
         // Un periodo nuevo empieza sin historial de fallos de convocatoria
@@ -239,7 +235,6 @@ public class PeriodoAcademicoService
         return r;
     }
 
-    // ---------------- 5. CONVOCATORIA MASIVA POR LOTES ----------------
     // Pendiente = materias vacías y sin FechaConvocatoria. Cada envío exitoso se marca en BD
     // al instante, así que si se corta (tope, Gmail, reinicio de Render) nadie la recibe dos veces.
     private IQueryable<EstudiantesSuscritos> ConsultaPendientes() =>

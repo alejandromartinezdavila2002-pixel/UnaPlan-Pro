@@ -4,12 +4,9 @@ using Microsoft.Extensions.Logging;
 
 namespace UnaPlan.Infrastructure.Services;
 
-// ========================================================================
-// 📣 Reanudación automática de la convocatoria de nuevo semestre.
-// Cada hora revisa si hay una convocatoria del periodo actual a medio enviar
-// (cortada por el tope de 350/24 h, el guardián o la cuota de Gmail) y envía
-// lo que permita el cupo. Solo envía de 7:00 a 22:00 (hora de Venezuela).
-// ========================================================================
+// Reanuda la convocatoria de nuevo semestre cuando se queda a medias. Cada hora revisa si
+// hay una convocatoria del periodo actual a medio enviar (cortada por el tope de 350/24 h,
+// el guardián o la cuota de Gmail) y envía lo que el cupo permita. Solo entre 7:00 y 22:00 (Venezuela).
 public class ConvocatoriaWorkerService : BackgroundService
 {
     private static readonly TimeSpan Intervalo = TimeSpan.FromHours(1);

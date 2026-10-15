@@ -15,9 +15,7 @@ public class ResultadoSuscripcion
     public string? ErrorEnvioTrabajos { get; set; }
 }
 
-// ========================================================================
 // Punto único de suscripción: lo usan el endpoint /solicitar-plan y el NotionWorkerService
-// ========================================================================
 public class SuscripcionService
 {
     private static readonly char[] Separadores = { ',', '.', ' ', '-', ';' };

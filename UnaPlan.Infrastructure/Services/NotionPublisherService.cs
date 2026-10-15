@@ -42,7 +42,7 @@ public class NotionPublisherService : BackgroundService
             {
                 var veTime = DateTime.UtcNow.AddHours(-4);
 
-                // 1. Reseteo semanal: Los domingos preparamos el sistema para el día siguiente
+                // Los domingos dejamos todo listo para publicar al día siguiente
                 if (veTime.DayOfWeek == DayOfWeek.Sunday && veTime.Day != _ultimoDiaRevisado)
                 {
                     _ultimoDiaRevisado = veTime.Day;
@@ -50,19 +50,18 @@ public class NotionPublisherService : BackgroundService
                     _logger.LogInformation("[Notion-Worker] 🔄 Reseteo dominical completado. Listo para publicar mañana.");
                 }
 
-                // 2. Ahorro de recursos extremo: Si no es Lunes, dormimos por 12 horas
+                // Si no es lunes no hay nada que hacer, dormimos 12 horas
                 if (veTime.DayOfWeek != DayOfWeek.Monday)
                 {
                     await Task.Delay(TimeSpan.FromHours(12), stoppingToken);
                     continue;
                 }
 
-                // 3. Ejecución del Lunes (A partir de las 6:00 AM)
+                // Lunes a partir de las 6:00 AM
                 if (veTime.DayOfWeek == DayOfWeek.Monday && veTime.Hour >= 6 && !_yaSePublicoEstaSemana)
                 {
                     _logger.LogInformation("[Notion-Worker] 🚀 ¡Es Lunes! Iniciando sincronización automática de la cartelera...");
 
-                    // Disparamos la lógica interna de sincronización
                     await SincronizarCarteleraAsync();
 
                     _yaSePublicoEstaSemana = true;
@@ -96,7 +95,6 @@ public class NotionPublisherService : BackgroundService
 
         try
         {
-            // 1. Calcular exactamente la fecha del próximo sábado
             DateTime hoy = DateTime.UtcNow.Date;
             int diasHastaSabado = ((int)DayOfWeek.Saturday - (int)hoy.DayOfWeek + 7) % 7;
 
@@ -107,7 +105,7 @@ public class NotionPublisherService : BackgroundService
 
             _logger.LogInformation($"Buscando evaluaciones exclusivamente para el próximo sábado: {proximoSabado:dd/MM/yyyy}");
 
-            // 2. Filtrar la base de datos priorizando FechaEntregaReal
+            // Prioriza FechaEntregaReal sobre la fecha original
             var evaluaciones = await db.Evaluaciones
                 .Where(e =>
                     (e.FechaEntregaReal.HasValue && e.FechaEntregaReal.Value.Date == proximoSabado) ||
@@ -116,7 +114,6 @@ public class NotionPublisherService : BackgroundService
 
             _logger.LogInformation($"Se encontraron {evaluaciones.Count} evaluaciones para publicar.");
 
-            // 3. Escribir cada evaluación en la Cartelera de Notion
             foreach (var eval in evaluaciones)
             {
                 var tipoEvaluacion = eval.Tipo ?? "Por definir";

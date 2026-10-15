@@ -31,12 +31,10 @@ public class PdfExtractorService
             {
                 var palabras = page.GetWords().ToList();
 
-                // ========================================================================
-                // 1. AGRUPAMIENTO ESPACIAL INTELIGENTE (Tolerancia Dinámica)
-                // ========================================================================
+                // Agrupamos las palabras en líneas por posición, porque el PDF no nos da líneas de texto
                 var lineas = new List<List<Word>>();
 
-                // Ordenar las palabras desde la parte superior de la página hacia abajo
+                // De arriba hacia abajo
                 var palabrasOrdenadas = palabras.OrderByDescending(w => w.BoundingBox.Bottom).ToList();
 
                 foreach (var palabra in palabrasOrdenadas)
@@ -46,7 +44,7 @@ public class PdfExtractorService
                     {
                         var palabraRef = linea.First();
 
-                        // EL SECRETO: Tolerancia dinámica basada en la altura real de la fuente (40% de su tamaño)
+                        // La tolerancia es relativa al tamaño de la fuente (40%) para que funcione con cualquier tamaño de letra
                         double tolerancia = palabra.BoundingBox.Height * 0.4;
 
                         // Si la diferencia en el eje Y es menor a nuestra tolerancia dinámica, es la misma línea
@@ -71,13 +69,9 @@ public class PdfExtractorService
                     .ToList();
 
 
-                // ========================================================================
-                // 2. PROCESAMIENTO DE LAS FILAS ENSAMBLADAS
-                // ========================================================================
                 foreach (var linea in filas)
                 {
-                    // FILTRO DE LLAVE PRIMARIA
-                    // Verificamos si la línea comienza exactamente con 3 números (Ej: "115")
+                    // Una línea de materia siempre arranca con el código de 3 dígitos (ej. "115")
                     var matchCodigo = Regex.Match(linea, @"^(\d{3})\b");
 
                     if (matchCodigo.Success)
@@ -88,27 +82,22 @@ public class PdfExtractorService
                         // Si encontramos fechas de evaluación en esta línea, procedemos
                         if (matchesEval.Count > 0)
                         {
-                            // 1. EXTRACCIÓN MILIMÉTRICA DEL NOMBRE
-                            // Calculamos el espacio exacto entre el código y el primer TP/TSP
+                            // El nombre de la materia es lo que queda entre el código y el primer TP/TSP
                             int inicioNombre = matchCodigo.Index + matchCodigo.Length;
                             int finNombre = matchesEval[0].Index;
-
-                            // Extraemos el texto del medio
                             string nombreMateriaCrudo = linea.Substring(inicioNombre, finNombre - inicioNombre);
 
-                            // 2. LIMPIEZA AVANZADA (Sanitización)
-                            // Quitamos espacios extra al inicio y final, y reducimos los espacios dobles a uno solo
+                            // Espacios extra al inicio/final fuera, y los dobles espacios a uno solo
                             string nombreLimpio = Regex.Replace(nombreMateriaCrudo.Trim(), @"\s+", " ");
 
-                            // 3. FORMATO PROFESIONAL (Title Case)
-                            // Convertimos "INgEniEría DE siStemas" a "Ingeniería De Sistemas"
+                            // De "INgEniEría DE siStemas" a "Ingeniería De Sistemas"
                             var cultureInfo = new System.Globalization.CultureInfo("es-ES", false);
                             string nombreBase = cultureInfo.TextInfo.ToTitleCase(nombreLimpio.ToLower());
 
+                            // TitleCase deja "Ii"/"Iii"/"Iv" en minúscula a medias; los pasamos a mayúscula (números romanos)
                             string nombreFormateado = Regex.Replace(nombreBase, @"\b(Ii{0,2}|Iv|Vi{0,2}|Ix|X)\b",
                             m => m.Value.ToUpper(), RegexOptions.IgnoreCase);
 
-                            // 4. MAPEO Y CONSTRUCCIÓN DE OBJETOS
                             foreach (Match m in matchesEval)
                             {
                                 // Parseo de fecha en formato Latino/Europeo

@@ -59,9 +59,7 @@ public class TelegramControlService
 
     public bool EsAdmin(long id) => _adminChatIds.Contains(id);
 
-    // ========================================================================
-    // 1. PANEL PRINCIPAL (al arrancar el servidor)
-    // ========================================================================
+    // Panel principal, se manda al arrancar el servidor
     public async Task EnviarPanelDeControlAsync()
     {
         if (_adminChatIds.Count == 0) return;
@@ -86,15 +84,13 @@ public class TelegramControlService
         }
     }
 
-    // ========================================================================
-    // 2. ENTRADA DE MENSAJES (texto del teclado, pasos del panel o PDF)
-    // ========================================================================
+    // Entrada de mensajes: texto del teclado, pasos del panel, o un PDF
     public async Task ProcesarMensajeAsync(Message mensaje)
     {
         var chatId = mensaje.Chat.Id;
         if (!EsAdmin(chatId)) return;
 
-        // 2.1 Documento (PDF del calendario)
+        // PDF del calendario
         if (mensaje.Document != null)
         {
             await ProcesarDocumentoAsync(chatId, mensaje.Document);
@@ -107,7 +103,7 @@ public class TelegramControlService
         var sesion = ObtenerSesion(chatId);
         bool hayProcesoEnCurso = sesion is { Paso: PasoPanel.Procesando or PasoPanel.AnalizandoPdf };
 
-        // 2.2 Botón del panel y /cancelar: cortan cualquier flujo abierto (salvo uno ya ejecutándose)
+        // El botón del panel y /cancelar cortan cualquier flujo abierto (salvo uno ya ejecutándose)
         if (texto == BotonPeriodoAcademico || texto == "/cancelar")
         {
             if (hayProcesoEnCurso)
@@ -125,24 +121,21 @@ public class TelegramControlService
 
         bool esBotonTeclado = texto == BotonBuscarTps || texto == BotonEncenderLogs || texto == BotonApagarLogs;
 
-        // 2.3 Respuesta a un paso del panel (PIN, nombre, correo, códigos)
+        // Respuesta a un paso del panel (PIN, nombre, correo, códigos)
         if (!esBotonTeclado && sesion != null)
         {
             await ProcesarPasoTextoAsync(chatId, mensaje.MessageId, texto, sesion);
             return;
         }
 
-        // 2.4 Comportamiento original del teclado
+        // Si no es nada de lo anterior, es el teclado de siempre
         await ProcesarComandoTecladoAsync(chatId, texto);
     }
 
-    // 2B. Procesar el texto enviado por los botones del teclado inferior
     public async Task ProcesarComandoTecladoAsync(long chatId, string comandoTexto)
     {
-        // Seguridad estricta
         if (!EsAdmin(chatId)) return;
 
-        // 🔎 Búsqueda manual de TPs
         if (comandoTexto == BotonBuscarTps)
         {
             await IniciarBusquedaManualTpAsync(chatId);
@@ -170,7 +163,7 @@ public class TelegramControlService
 
         try
         {
-            // Para actualizar un teclado inferior (ReplyKeyboard), OBLIGATORIAMENTE debemos enviar un nuevo mensaje.
+            // Un ReplyKeyboard solo se actualiza mandando un mensaje nuevo, no hay otra forma
             await _botClient.SendMessage(
                 chatId: chatId,
                 text: estadoTexto,
@@ -186,7 +179,6 @@ public class TelegramControlService
         }
     }
 
-    // 2C. Búsqueda manual de TPs desde Telegram
     private async Task IniciarBusquedaManualTpAsync(long chatId)
     {
         await EnviarSeguroAsync(chatId, "⏳ <b>Buscando TPs pendientes en Drive...</b>\n<i>Te aviso aquí cuando termine.</i>");
@@ -242,9 +234,7 @@ public class TelegramControlService
             sb.AppendLine($"<i>...y {items.Count - max} más</i>");
     }
 
-    // ========================================================================
-    // 3. PANEL "PERIODO ACADÉMICO" — sesión por chat
-    // ========================================================================
+    // Panel "Periodo Académico": sesión por chat
     public const string PrefijoPanel = "pa:";
     private const string CbIniciarPeriodo = "pa:iniciar";
     private const string CbPlanEstudiante = "pa:plan";
@@ -321,9 +311,7 @@ public class TelegramControlService
         return EnviarSeguroAsync(chatId, "🎓 <b>Panel de Periodo Académico</b>\n\n¿Qué quieres hacer?", teclado);
     }
 
-    // ========================================================================
-    // 4. BOTONES INLINE DEL PANEL (prefijo "pa:")
-    // ========================================================================
+    // Botones inline del panel (todos con prefijo "pa:")
     public async Task ProcesarCallbackAsync(CallbackQuery query)
     {
         var chatId = query.Message?.Chat.Id ?? query.From.Id;
@@ -382,9 +370,7 @@ public class TelegramControlService
         }
     }
 
-    // ========================================================================
-    // 5. PASOS DE TEXTO (PIN, nombre, correo, códigos)
-    // ========================================================================
+    // Maneja cada paso de texto que puede llegar: PIN, nombre, correo o códigos
     private async Task ProcesarPasoTextoAsync(long chatId, int messageId, string texto, SesionPanel sesion)
     {
         sesion.UltimaActividad = DateTime.UtcNow;
@@ -457,9 +443,7 @@ public class TelegramControlService
         }
     }
 
-    // ========================================================================
-    // 6. FLUJO "INICIAR NUEVO PERIODO" — PIN
-    // ========================================================================
+    // Flujo "iniciar nuevo periodo": pide el PIN
     private async Task IniciarFlujoPeriodoAsync(long chatId)
     {
         // Falla cerrado: sin PIN configurado no se ejecuta nada
@@ -497,9 +481,7 @@ public class TelegramControlService
         await EnviarSeguroAsync(chatId, "❌ PIN incorrecto. Escríbelo de nuevo.", BotonesCancelar());
     }
 
-    // ========================================================================
-    // 7. FLUJO "INICIAR NUEVO PERIODO" — PDF y resumen (no toca la base de datos)
-    // ========================================================================
+    // Recibe el PDF, lo analiza y muestra el resumen antes de tocar nada en la base de datos
     private async Task ProcesarDocumentoAsync(long chatId, Document documento)
     {
         var sesion = ObtenerSesion(chatId);
@@ -623,9 +605,7 @@ public class TelegramControlService
         return sb.ToString();
     }
 
-    // ========================================================================
-    // 8. FLUJO "INICIAR NUEVO PERIODO" — confirmar → limpiar + cargar → convocatoria
-    // ========================================================================
+    // Al confirmar: limpia el semestre anterior, carga el calendario nuevo y lanza la convocatoria
     private async Task ConfirmarPeriodoAsync(long chatId)
     {
         var sesion = ObtenerSesion(chatId);
@@ -657,7 +637,7 @@ public class TelegramControlService
         {
             try
             {
-                // 1. Limpiar + cargar (transacción única dentro del servicio)
+                // Limpiar + cargar (transacción única dentro del servicio)
                 try
                 {
                     using var scope = _scopeFactory.CreateScope();
@@ -673,7 +653,7 @@ public class TelegramControlService
                     return;
                 }
 
-                // 2. Convocatoria masiva (el periodo ya quedó cargado aunque esto falle)
+                // Convocatoria masiva (el periodo ya quedó cargado aunque esto falle)
                 await EnviarSeguroAsync(chatId, "📣 Enviando la convocatoria a los estudiantes...\n<i>Puede tardar unos minutos.</i>");
                 try
                 {
@@ -822,9 +802,7 @@ public class TelegramControlService
             await EnviarSeguroAsync(adminId, html);
     }
 
-    // ========================================================================
-    // 9. FLUJO "GENERAR PLAN A ESTUDIANTE"
-    // ========================================================================
+    // Flujo "generar plan a estudiante"
     private async Task ConfirmarPlanAsync(long chatId)
     {
         var sesion = ObtenerSesion(chatId);
@@ -903,9 +881,6 @@ public class TelegramControlService
         return sb.ToString();
     }
 
-    // ========================================================================
-    // 10. HELPERS DE TELEGRAM
-    // ========================================================================
     private static InlineKeyboardMarkup BotonesCancelar() =>
         new(new[] { new[] { InlineKeyboardButton.WithCallbackData("❌ Cancelar", CbCancelar) } });
 

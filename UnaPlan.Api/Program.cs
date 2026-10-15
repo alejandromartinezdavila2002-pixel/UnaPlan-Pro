@@ -18,17 +18,13 @@ using Telegram.Bot;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// ========================================================================
-// 1. CONFIGURACIONES Y SERVICIOS
-// ========================================================================
 builder.Services.AddMemoryCache();
 
-// Registro del Logger de Telegram
 builder.Logging.AddTelegramBot(options =>
 {
     options.BotToken = builder.Configuration["Telegram:BotToken"] ?? "";
 
-    // Extraemos la lista de administradores desde Secrets o Render (soportando formato de comas)
+    // La lista de admins puede venir de Secrets o de Render, separada por comas
     var adminIdsString = builder.Configuration["Telegram:AdminChatIds"];
     if (!string.IsNullOrEmpty(adminIdsString))
     {
@@ -72,27 +68,19 @@ builder.Services.AddSwaggerGen(options =>
 });
 
 
-// 2 
-// Usamos el nombre exacto de tu configuración: "SupabaseConnection"
+// El nombre de la cadena de conexión tiene que ser exactamente "SupabaseConnection"
 builder.Services.AddDbContextPool<AppDbContext>(options =>
     options.UseNpgsql(builder.Configuration.GetConnectionString("SupabaseConnection")),
     poolSize: 100);
 
-// Agregamos el servicio de extracción de PDFs 
 builder.Services.AddScoped<PdfExtractorService>();
-
-// Agregamos el servicio de scraping del catálogo 
 builder.Services.AddScoped<CatalogoScraperService>();
-
-// Agregamos el servicio de generación de Excel y envío de correos
 builder.Services.AddScoped<ExcelGeneratorService>();
 
-// Registramos el Cerebro de Telegram como Singleton
+// Singleton porque mantiene estado (sesiones del panel) entre requests
 builder.Services.AddSingleton<TelegramControlService>();
 
-// ========================================================================
-// 🛡️ REGISTRO ENTERPRISE: Google Gmail Service (Singleton)
-// ========================================================================
+// Gmail también va como Singleton: crear el cliente OAuth2 en cada request sale caro
 builder.Services.AddSingleton<GmailService>(sp =>
 {
     var config = sp.GetRequiredService<IConfiguration>();
@@ -109,7 +97,7 @@ builder.Services.AddSingleton<GmailService>(sp =>
             ClientSecret = clientSecret
         },
         Scopes = new[] { GmailService.Scope.GmailSend },
-        DataStore = new NullDataStore() // 🛡️ Clave maestra: Desactiva el File System Lock en Windows
+        DataStore = new NullDataStore() // Sin esto, en Windows el flujo OAuth2 intenta escribir un token en disco y falla
     });
 
     var credential = new UserCredential(flow, "unaplan-system", new TokenResponse
@@ -135,27 +123,18 @@ builder.Services.AddScoped<PeriodoAcademicoService>();
 builder.Services.AddScoped<PlanEstudianteService>();
 
 
-// Registra el trabajador en segundo plano
 builder.Services.AddHostedService<SupabaseKeepAliveService>();
-
-// El NotionWorkerService 
 builder.Services.AddHostedService<NotionWorkerService>();
-
-
-
 builder.Services.AddHostedService<TpMonitorWorkerService>();
 builder.Services.AddHostedService<TspMonitorWorkerService>();
 
 // Reanuda la convocatoria de nuevo semestre cuando se libera cupo (tope por 24 h)
 builder.Services.AddHostedService<ConvocatoriaWorkerService>();
 
-// Aquí es donde registramos el cliente de Notion, pero sin hardcodear el token
-// Registro del cliente de Notion usando IConfiguration para evitar Hardcoding
+// Cliente de Notion, con el token leído de la config en vez de hardcodeado
 builder.Services.AddSingleton<Notion.Client.INotionClient>(sp =>
 {
     var config = sp.GetRequiredService<IConfiguration>();
-
-    // El código busca la variable, pero no conoce su valor real aquí
     var token = config["NotionSettings:Token"];
 
     if (string.IsNullOrEmpty(token))
@@ -169,8 +148,7 @@ builder.Services.AddSingleton<Notion.Client.INotionClient>(sp =>
     });
 });
 
-// Registra el servicio de Notion como Singleton y HostedService para que funcione en segundo plano 
-// y además pueda ser inyectado en los endpoints.
+// Singleton + HostedService: así corre en segundo plano y también se puede inyectar en los endpoints
 builder.Services.AddSingleton<NotionPublisherService>();
 
 builder.Services.AddHostedService(provider => provider.GetRequiredService<NotionPublisherService>());
@@ -179,42 +157,32 @@ builder.Services.AddHostedService(provider => provider.GetRequiredService<Notion
 builder.Services.AddSingleton<TelegramLogDispatcher>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramLogDispatcher>());
 
-// ¡AQUÍ SE CONSTRUYE LA APP! (Ya no se pueden agregar más servicios al builder)
+// A partir de aquí ya no se pueden agregar más servicios al builder
 var app = builder.Build();
 
-// ... arriba en los middlewares ...
-app.UseStaticFiles(); // <--- ¡IMPORTANTE! Esto permite leer la carpeta wwwroot
+app.UseStaticFiles(); // necesario para servir wwwroot
 
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
-    // Inyectamos nuestro archivo de estilos personalizado
     c.InjectStylesheet("/swagger-ui/custom.css");
 });
-// ========================================================================
-// 3. PIPELINE DE MIDDLEWARE (Diseño y Ruteo)
-// ========================================================================
+
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
     app.UseSwaggerUI(c => {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "UnaPlan API v1");
 
-        // 1. Inyectamos el Tema Oscuro (Dark Mode)
+        // Tema oscuro en Swagger
         c.InjectStylesheet("https://cdn.jsdelivr.net/npm/swagger-ui-themes@3.0.1/themes/3.x/theme-monokai.css");
-
-        // 2. FORZAMOS el fondo oscuro para que no quede blanco el resto de la página
         c.HeadContent = "<style>body { background-color: #1b1b1b !important; } .swagger-ui .info .title { color: #ffffff !important; }</style>";
     });
 }
 
 app.UseHttpsRedirection();
 
-// ========================================================================
-// 4. ENDPOINTS (Rutas de la API)
-// ========================================================================
-
-// ---> ENDPOINT 1: PREVISUALIZAR
+// Endpoint: previsualizar
 app.MapPost("/api/calendarios/preview", async (IFormFile archivoPdf, PeriodoAcademicoService periodo) =>
 {
     if (archivoPdf == null || archivoPdf.Length == 0)
@@ -238,7 +206,7 @@ app.MapPost("/api/calendarios/preview", async (IFormFile archivoPdf, PeriodoAcad
 .WithDescription("Abre el archivo PDF, extrae las materias y fechas, y devuelve un JSON limpio. No guarda nada en la base de datos.");
 
 
-// ---> ENDPOINT 2: CONFIRMAR Y GUARDAR
+// Endpoint: confirmar y guardar
 app.MapPost("/api/calendarios/confirm", async ([FromBody] CalendarioProcesado calendarioConfirmado, PeriodoAcademicoService periodo) =>
 {
     if (calendarioConfirmado == null || !calendarioConfirmado.Evaluaciones.Any())
@@ -253,7 +221,7 @@ app.MapPost("/api/calendarios/confirm", async ([FromBody] CalendarioProcesado ca
 .WithDescription("Recibe el JSON verificado y lo inserta en las tablas de Supabase.");
 
 
-// ---> ENDPOINT 3: LIMPIAR TODO (PREPARACIÓN NUEVO SEMESTRE)
+// Endpoint: limpiar todo para preparar el nuevo semestre
 app.MapDelete("/api/calendarios/clear-all", async (PeriodoAcademicoService periodo) =>
 {
     try
@@ -274,14 +242,11 @@ app.MapDelete("/api/calendarios/clear-all", async (PeriodoAcademicoService perio
 
 
 
-// ========================================================================
-// 5. CATÁLOGO DE MATERIAS (Planes y Materiales de Apoyo)
-// ========================================================================
+// Catálogo de materias (planes y materiales de apoyo)
 
-// ---> 1. OBTENER TODO EL CATÁLOGO
 app.MapGet("/api/catalogo/planes", async (AppDbContext db) =>
 {
-    // Usamos Include para traer el Plan de Curso JUNTO con su lista de materiales
+    // Include para traer cada plan de curso junto con sus materiales
     var planes = await db.PlanesDeCurso
         .Include(p => p.MaterialesDeApoyo)
         .ToListAsync();
@@ -293,7 +258,7 @@ app.MapGet("/api/catalogo/planes", async (AppDbContext db) =>
 .WithDescription("Devuelve todos los Planes de Curso y sus Materiales de Apoyo anidados.");
 
 
-// ---> 2. CREAR O ACTUALIZAR UN PLAN DE CURSO (Upsert)
+// Crea o actualiza un plan de curso (upsert)
 app.MapPost("/api/catalogo/planes", async ([FromBody] PlanDeCurso nuevoPlan, AppDbContext db) =>
 {
     if (string.IsNullOrWhiteSpace(nuevoPlan.CodigoMateria))
@@ -322,7 +287,7 @@ app.MapPost("/api/catalogo/planes", async ([FromBody] PlanDeCurso nuevoPlan, App
 .WithDescription("Si el código de materia no existe, lo inserta. Si ya existe, actualiza sus datos.");
 
 
-// ---> 3. ELIMINAR UN PLAN DE CURSO
+// Elimina un plan de curso
 app.MapDelete("/api/catalogo/planes/{codigo}", async (string codigo, AppDbContext db) =>
 {
     var plan = await db.PlanesDeCurso.FindAsync(codigo);
@@ -337,7 +302,7 @@ app.MapDelete("/api/catalogo/planes/{codigo}", async (string codigo, AppDbContex
 .WithTags("4. Gestión del Catálogo");
 
 
-// ---> 4. AGREGAR UN MATERIAL DE APOYO (A un Plan ya existente)
+// Agrega un material de apoyo a un plan ya existente
 app.MapPost("/api/catalogo/materiales", async ([FromBody] MaterialApoyo nuevoMaterial, AppDbContext db) =>
 {
     if (string.IsNullOrWhiteSpace(nuevoMaterial.CodigoMateria))
@@ -358,7 +323,7 @@ app.MapPost("/api/catalogo/materiales", async ([FromBody] MaterialApoyo nuevoMat
 .WithDescription("Inserta un nuevo material de apoyo conectado a un Plan de Curso específico mediante su código.");
 
 
-// ---> 5. ELIMINAR UN MATERIAL DE APOYO ESPECÍFICO
+// Elimina un material de apoyo específico
 app.MapDelete("/api/catalogo/materiales/{id}", async (int id, AppDbContext db) =>
 {
     var material = await db.MaterialesDeApoyo.FindAsync(id);
@@ -377,7 +342,6 @@ app.MapGet("/api/admin/preview-catalogo", async (CatalogoScraperService scraper)
 {
     try
     {
-        // Llamamos al motor de fusión inteligente
         var vistaPreviaJson = await scraper.GenerarVistaPreviaMasivaAsync();
 
         return Results.Ok(new
@@ -396,10 +360,9 @@ app.MapGet("/api/admin/preview-catalogo", async (CatalogoScraperService scraper)
 .WithSummary("1. Previsualizar Mapeo de Drive (JSON)")
 .WithDescription("Analiza todos los enlaces de Drive estáticos, fusiona las materias duplicadas usando su código de 3 dígitos, y muestra un JSON limpio listo para ser insertado en Supabase.");
 
-// ---> 2. GUARDAR TODO EL CATÁLOGO EN LA BASE DE DATOS
+// Guarda todo el catálogo en la base de datos
 app.MapPost("/api/admin/confirmar-catalogo", async ([FromBody] CatalogoResponseWrapper peticion, CatalogoScraperService scraper) =>
 {
-    // Extraemos la lista de la envoltura que envía Swagger
     var datos = peticion.Datos;
 
     if (datos == null || !datos.Any())
@@ -419,7 +382,7 @@ app.MapPost("/api/admin/confirmar-catalogo", async ([FromBody] CatalogoResponseW
 .WithSummary("2. Confirmar y Guardar en Supabase")
 .WithDescription("Recibe el JSON completo generado por el endpoint de previsualización (incluyendo mensaje y total) y lo inserta permanentemente en las tablas de Planes y Materiales.");
 
-// ---> 3. VACIAR TODA LA BASE DE DATOS (Peligro)
+// Vacía toda la base de datos del catálogo (ojo, esto es destructivo)
 app.MapDelete("/api/admin/limpiar-catalogo", async (CatalogoScraperService scraper) =>
 {
     try
@@ -436,7 +399,7 @@ app.MapDelete("/api/admin/limpiar-catalogo", async (CatalogoScraperService scrap
 .WithSummary("3. Vaciar tablas (Borrado total)")
 .WithDescription("Elimina todos los registros de Planes de Curso y Materiales de Apoyo de la base de datos de un solo golpe usando ExecuteDeleteAsync.");
 
-// ---> 4. BÚSQUEDA MANUAL DE TPs (sin esperar al vigilante sabatino)
+// Búsqueda manual de TPs, sin esperar al escaneo semanal
 app.MapPost("/api/admin/tp/buscar-ahora", async (CatalogoScraperService scraper) =>
 {
     try
@@ -467,9 +430,7 @@ app.MapPost("/api/admin/tp/buscar-ahora", async (CatalogoScraperService scraper)
 .WithDescription("Ejecuta en el momento el mismo escaneo de Drive que hace el TpMonitorWorkerService los sábados: registra los TPs que ya salieron y envía las alertas por correo a los suscritos. Devuelve 409 si ya hay un escaneo corriendo.");
 
 
-// ========================================================================
-// 5. ENDPOINTS PÚBLICOS (Para Estudiantes)
-// ========================================================================
+// Endpoints públicos (para estudiantes)
 
 app.MapPost("/api/estudiantes/solicitar-plan", async (
     [FromBody] SolicitudPlanDto solicitud,
@@ -518,7 +479,7 @@ app.MapPost("/api/notion/sync-cartelera", async (NotionPublisherService publishe
 
 
 
-// ---> ENDPOINT MÁGICO PARA ENGAÑAR A EXCEL Y ABRIR GOOGLE DRIVE
+// Excel no deja poner links de Drive directo en una celda, así que redirige por acá
 app.MapGet("/api/go", (string target) =>
 {
     if (string.IsNullOrEmpty(target))
@@ -559,11 +520,8 @@ app.MapGet("/api/ping", () => Results.Ok(new { mensaje = "API Despierta y lista"
 //})
 //.ExcludeFromDescription();
 
-// ========================================================================
-// 6. PANEL DE ADMINISTRACIÓN - SISTEMA CRM DE RETENCIÓN DE ESTUDIANTES
-// ========================================================================
+// Panel de administración - CRM de retención de estudiantes
 
-// ---> ENDPOINT CRM 1: ENVIAR CONVOCATORIA DE INICIO DE SEMESTRE
 app.MapPost("/api/admin/crm/convocatoria-semestre", async (PeriodoAcademicoService periodo) =>
 {
     try
@@ -602,7 +560,7 @@ app.MapPost("/api/admin/crm/convocatoria-semestre", async (PeriodoAcademicoServi
 .WithDescription("Envía la convocatoria a los estudiantes con materias vacías que aún no la recibieron (FechaConvocatoria nula), con un tope de Crm:LimiteDiarioConvocatoria (350 por defecto) cada 24 h. Cada envío queda marcado, así que relanzarlo nunca duplica correos; lo que no quepa lo reanuda el ConvocatoriaWorkerService.");
 
 
-// ---> ENDPOINT CRM 2: PROCESAR ADVERTENCIAS DE INACTIVIDAD (EL ULTIMÁTUM)
+// El ultimátum: avisa a los que llevan el semestre sin materias registradas
 app.MapPost("/api/admin/crm/procesar-advertencias", async (AppDbContext db, EmailService emailService) =>
 {
     try
@@ -651,17 +609,14 @@ app.MapPost("/api/admin/crm/procesar-advertencias", async (AppDbContext db, Emai
 .WithDescription("Detecta a los estudiantes que no han registrado materias en el ciclo actual, les despacha la alerta de remoción y guarda la estampa de tiempo.");
 
 
-// ---> ENDPOINT CRM 3: EJECUTAR PURGA DE USUARIOS FANTASMAS (EL VERDUGO)
+// Borra de forma permanente a los estudiantes advertidos hace más de 15 días que siguen sin materias
 app.MapDelete("/api/admin/crm/purgar-fantasmas", async (AppDbContext db) =>
 {
     try
     {
-        // El umbral crítico ocurre cuando la fecha de advertencia supera los 15 días en el pasado
         var fechaLimite = DateTime.UtcNow.AddDays(-15);
 
-        // El verdugo ejecuta un Hard Delete únicamente si:
-        // 1. Fue advertido hace más de 15 días.
-        // 2. 🚨 Sigue con la lista de materias vacía (Si inscribió en Notion, se salvó automáticamente).
+        // Si inscribió algo en Notion mientras tanto, ya no entra en el borrado
         var filasBorradas = await db.EstudiantesSuscritos
             .Where(e => e.FechaAdvertencia != null && e.FechaAdvertencia <= fechaLimite && e.MateriasInscritas.Count == 0)
             .ExecuteDeleteAsync();
@@ -697,40 +652,36 @@ app.Lifetime.ApplicationStarted.Register(() =>
     _ = telegramControl.EnviarPanelDeControlAsync();
 });
 
-// ========================================================================
-// WEBHOOK DE TELEGRAM
-// ========================================================================
-
-// 1. Endpoint que recibe los mensajes de los botones (Webhook)
+// Webhook de Telegram: recibe los mensajes y los clicks en botones
 app.MapPost("/api/telegram/webhook", async (
     [FromBody] Telegram.Bot.Types.Update update,
     TelegramControlService telegramService,
     Microsoft.Extensions.Caching.Memory.IMemoryCache cache,
     IConfiguration config) =>
 {
-    // 0. Telegram reintenta el mismo update si no recibe 200 a tiempo: lo procesamos UNA sola vez
-    //    (evita, por ejemplo, disparar dos veces el reinicio de semestre)
+    // Telegram reintenta el mismo update si no recibe 200 a tiempo, así que lo procesamos una sola vez
+    // (evita, por ejemplo, disparar dos veces el reinicio de semestre)
     var claveUpdate = $"tg-update:{update.Id}";
     if (cache.TryGetValue(claveUpdate, out _)) return Results.Ok();
     cache.Set(claveUpdate, true, TimeSpan.FromMinutes(10));
 
-    // A. Mensajes: botones del teclado inferior, respuestas del panel (PIN, datos) o PDF
+    // Mensajes: botones del teclado inferior, respuestas del panel (PIN, datos) o PDF
     if (update.Message != null)
     {
         await telegramService.ProcesarMensajeAsync(update.Message);
     }
 
-    // B. Click en Botón Interactivo
+    // Click en un botón interactivo
     if (update.CallbackQuery != null)
     {
-        // B.1 Botones del panel de Periodo Académico (prefijo "pa:")
+        // Botones del panel de Periodo Académico (prefijo "pa:")
         if (TelegramControlService.EsCallbackDelPanel(update.CallbackQuery.Data))
         {
             await telegramService.ProcesarCallbackAsync(update.CallbackQuery);
             return Results.Ok();
         }
 
-        // B.2 Detalles de logs: solo administradores
+        // Detalles de logs: solo administradores
         if (!telegramService.EsAdmin(update.CallbackQuery.From.Id))
             return Results.Ok();
 
@@ -772,14 +723,13 @@ app.MapPost("/api/telegram/webhook", async (
         }
     }
 
-    // Telegram SIEMPRE requiere un 200 OK para saber que recibimos el mensaje
+    // Telegram siempre espera un 200 OK para saber que recibimos el mensaje
     return Results.Ok();
 })
 .ExcludeFromDescription(); // No lo mostramos en Swagger por seguridad
 
 
-
-// 2. Endpoint para registrar la URL en Telegram (Solo se llama una vez)
+// Registra la URL del webhook en Telegram (se llama una sola vez)
 app.MapGet("/api/telegram/register-webhook", async (IConfiguration config) =>
 {
     try 
@@ -810,15 +760,12 @@ app.MapGet("/api/telegram/register-webhook", async (IConfiguration config) =>
 
 app.Run();
 
-// ========================================================================
-// CLASES Y DTOS
-// ========================================================================
+// DTOs
+
 public class CatalogoResponseWrapper
 {
     public string? Mensaje { get; set; }
     public int? TotalDrivesAnalizados { get; set; }
-
-    // Aquí es donde viajará tu lista de materias
     public List<UnaPlan.Core.Entities.CatalogoPreviewDto> Datos { get; set; } = new();
 }
 

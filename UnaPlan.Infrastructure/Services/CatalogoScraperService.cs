@@ -20,11 +20,10 @@ public class CatalogoScraperService
     private readonly EmailService _emailService;
     private readonly Microsoft.Extensions.Logging.ILogger<CatalogoScraperService> _logger;
 
-    // 🔒 Candado global (static porque el servicio es Scoped): evita que el escaneo manual
-    // y el del TpMonitorWorkerService corran a la vez y dupliquen registros/correos.
+    // Candado estático (el servicio es Scoped, pero el candado tiene que ser uno solo para toda la app):
+    // evita que el escaneo manual y el del TpMonitorWorkerService corran a la vez y dupliquen registros/correos.
     private static readonly SemaphoreSlim _candadoEscaneoTp = new(1, 1);
 
-    // 2. El Constructor: Aquí es donde la API le "inyecta" la conexión al servicio
     public CatalogoScraperService(AppDbContext db, EmailService emailService, Microsoft.Extensions.Logging.ILogger<CatalogoScraperService> logger)
     {
         _db = db;
@@ -33,11 +32,8 @@ public class CatalogoScraperService
     }
 
 
-    // =======================================================================
-    // DICCIONARIOS DE GOOGLE DRIVE (Rastreo de TP y TSP)
-    // Clave: Primer dígito del código de la materia (Ej: "1" para 100-199)
-    // Valor: ID de la carpeta de Google Drive
-    // =======================================================================
+    // Carpetas de Drive donde están los TSP, indexadas por el primer dígito del código de materia
+    // (ej. "1" cubre 100-199)
     public static readonly Dictionary<string, string> CarpetasTsp = new()
     {
         { "0", "1zSmylBd2L3lXW-8Ttgrw8p56Q4xaR6IX" }, // 000-099
@@ -56,7 +52,7 @@ public class CatalogoScraperService
         { "1", "1PEQRe2W8SqkknAmBZbPUgxRnxAyxf2_W" }, // 100-199
         { "2", "108shUWVobZJ_7P1ejEW5k6f7kTiseZYO" }, // 200-299
         { "3", "1PLReKygdtO_XaTr0EgDsdvldU2mdmtbp" }, // 300-399
-        // Nota: No hay carpeta 400 en los TP según los datos proporcionados
+        // No existe carpeta 400 para los TP
         { "5", "1Gs4m09mM4TNSL5iwry07lYwUSGQsnSYm" }, // 500-599
         { "6", "13Tt2gsSEgR8KwJZVwe1cM8-I9sU_Mp0w" }, // 600-699
         { "7", "1JhSL5a7eNAfVRnUzymZfwTZrG-RrjAgg" }, // 700-799
@@ -64,9 +60,7 @@ public class CatalogoScraperService
     };
 
 
-    // ========================================================================
-    // 1. FUENTES DE DATOS ESTÁTICAS PARA PLANES DE CURSO
-    // ========================================================================
+    // Carpetas de Drive con los planes de curso, por carrera
     public static readonly Dictionary<string, string> DrivePlanesDeCurso = new()
     {
         { "Administración de Empresas", "1JMXsaf3z5ZX26Yx0rgeKY3Rlh2VZeVfm" },
@@ -85,9 +79,7 @@ public class CatalogoScraperService
         { "TSU Contaduría", "1sUZVBruTaWEpcXqZl3O0P1pBqqp3UUGx" }
     };
 
-    // ========================================================================
-    // 2. FUENTES DE DATOS ESTÁTICAS PARA MATERIALES DE APOYO
-    // ========================================================================
+    // Carpetas de Drive con los materiales de apoyo
     public static readonly Dictionary<string, string> DriveMaterialesApoyo = new()
     {
         { "126 Matemática", "1LQBPP8yxvKFb2-y4u4diB0OoOrTpHYVN" },
@@ -106,23 +98,21 @@ public class CatalogoScraperService
         
     };
 
-    // ========================================================================
-    // 3. MOTOR DE AUTENTICACIÓN GOOGLE
-    // ========================================================================
+    // Autenticación contra Google Drive
     private DriveService GetDriveService()
     {
         GoogleCredential credential;
 
-        // 1. Ruta oficial segura en los servidores de Render
+        // Ruta donde Render monta el secret file
         string rutaCredenciales = "/etc/secrets/google-credentials.json";
 
-        // 2. Si el archivo no está ahí (porque estamos probando con Windows), usa la ruta local.
+        // Si no está (estamos en local, en Windows), cae a la ruta del repo
         if (!File.Exists(rutaCredenciales))
         {
             rutaCredenciales = "google-credentials.json";
         }
 
-        // Se usa FromJson. Se silencia la advertencia porque el JSON proviene de una ruta local segura controlada por nosotros, no de un usuario externo.
+        // FromJson está deprecado pero el JSON viene de un archivo nuestro, no de un usuario; se silencia el warning
         #pragma warning disable CS0618
                 credential = GoogleCredential.FromJson(File.ReadAllText(rutaCredenciales))
                     .CreateScoped(DriveService.Scope.DriveReadonly);
@@ -136,9 +126,7 @@ public class CatalogoScraperService
         });
     }
 
-    // ========================================================================
-    // 4. LECTOR GENÉRICO DE CARPETAS (Soporta paginación)
-    // ========================================================================
+    // Lee todos los archivos de una carpeta de Drive, paginando si hace falta
     private async Task<List<(string Nombre, string Url)>> LeerArchivosDeCarpetaAsync(DriveService service, string idCarpeta)
     {
         var archivosEncontrados = new List<(string, string)>();
@@ -149,8 +137,7 @@ public class CatalogoScraperService
             do
             {
                 var request = service.Files.List();
-                // Buscamos archivos dentro de esta carpeta que NO estén en la papelera
-                // Por esto (Añadimos el soporte para Drive compartido):
+                // Archivos de esta carpeta que no estén en la papelera (incluye Drives compartidos)
                 request.Q = $"'{idCarpeta}' in parents and trashed = false";
                 request.IncludeItemsFromAllDrives = true;
                 request.SupportsAllDrives = true;
@@ -180,9 +167,7 @@ public class CatalogoScraperService
         return archivosEncontrados;
     }
 
-    // ========================================================================
-    // 5. MOTOR DE FUSIÓN Y EXTRACCIÓN (Inteligencia Anti-Duplicados)
-    // ========================================================================
+    // Recorre Drive y fusiona planes + materiales por código de materia, sin duplicar
     public async Task<List<CatalogoPreviewDto>> GenerarVistaPreviaMasivaAsync()
     {
         var materiasFusionadas = new Dictionary<string, CatalogoPreviewDto>();
@@ -191,9 +176,7 @@ public class CatalogoScraperService
 
         var driveService = GetDriveService();
 
-        // --------------------------------------------------------
-        // PASO A: PROCESAR TODOS LOS PLANES DE CURSO
-        // --------------------------------------------------------
+        // Planes de curso primero
         foreach (var carrera in DrivePlanesDeCurso)
         {
             var archivosEnDrive = await LeerArchivosDeCarpetaAsync(driveService, carrera.Value);
@@ -228,9 +211,7 @@ public class CatalogoScraperService
             }
         }
 
-        // --------------------------------------------------------
-        // PASO B: PROCESAR TODOS LOS MATERIALES DE APOYO
-        // --------------------------------------------------------
+        // Y después los materiales de apoyo
         foreach (var categoria in DriveMaterialesApoyo)
         {
             var archivosEnDrive = await LeerArchivosDeCarpetaAsync(driveService, categoria.Value);
@@ -281,7 +262,7 @@ public class CatalogoScraperService
     {
         foreach (var item in catalogo)
         {
-            // 1. Buscamos si el Plan de Curso ya existe
+            // ¿Ya existe el plan de curso?
             var planExistente = await _db.PlanesDeCurso
                 .Include(p => p.MaterialesDeApoyo)
                 .FirstOrDefaultAsync(p => p.CodigoMateria == item.CodigoMateria);
@@ -307,7 +288,7 @@ public class CatalogoScraperService
                 _db.PlanesDeCurso.Add(planExistente);
             }
 
-            // 2. Agregamos los materiales de apoyo
+            // Y los materiales de apoyo
             foreach (var mat in item.Materiales)
             {
                 _db.MaterialesDeApoyo.Add(new MaterialApoyo
@@ -319,26 +300,21 @@ public class CatalogoScraperService
             }
         }
 
-        // Guardamos todos los cambios de una sola vez (Atómico)
         await _db.SaveChangesAsync();
     }
 
 
     public async Task LimpiarTodoElCatalogoAsync()
     {
-        // 1. Borramos primero los materiales (hijos) para que la base de datos no se queje
+        // Los materiales primero (son hijos de PlanesDeCurso por FK)
         await _db.MaterialesDeApoyo.ExecuteDeleteAsync();
-
-        // 2. Borramos todos los planes de curso (padres)
         await _db.PlanesDeCurso.ExecuteDeleteAsync();
     }
 
 
 
 
-    // ========================================================================
-    // 6A. MOTOR DE ESCANEO TÁCTICO (TSPs - Por Fecha Específica)
-    // ========================================================================
+    // Busca los TSP que se entregan en una fecha puntual
     public async Task EscanearTspAsync(DateTime fechaObjetivo)
     {
         var driveService = GetDriveService();
@@ -379,7 +355,7 @@ public class CatalogoScraperService
 
                 DateTime? fechaRealExtraida = null;
 
-                // LECTURA EN MEMORIA (PdfPig) 
+                // Abrimos el PDF en memoria con PdfPig para sacarle la fecha real
                 try
                 {
                     var downloadRequest = driveService.Files.Get(archivoDrive.Id);
@@ -421,9 +397,7 @@ public class CatalogoScraperService
                 await _db.SaveChangesAsync();
                 Console.WriteLine($"¡Trabajo encontrado y guardado!: {eval.CodigoMateria}");
 
-                // =========================================================
-                // MÓDULO 5: DISPARAR NOTIFICACIONES A SUSCRIPTORES
-                // =========================================================
+                // Avisamos a los suscritos a esta materia
                 var estudiantesInteresados = await _db.EstudiantesSuscritos
                     .Where(e => e.MateriasInscritas.Contains(eval.CodigoMateria))
                     .ToListAsync();
@@ -467,9 +441,7 @@ public class CatalogoScraperService
         }
     }
 
-    // ========================================================================
-    // 6B. MOTOR DE ESCANEO ESTRATÉGICO (TPs - Búsqueda de pendientes)
-    // ========================================================================
+    // Busca los TP que todavía no se han publicado
     /// <param name="esperarSiOcupado">
     /// true (worker): espera a que termine el escaneo en curso.
     /// false (manual): si ya hay uno corriendo, regresa de inmediato con EscaneoEnCurso = true.
@@ -500,15 +472,15 @@ public class CatalogoScraperService
         var resultado = new ResultadoEscaneoTp();
         var driveService = GetDriveService();
 
-        // Buscamos TPs en toda la base de datos que AÚN NO tengan un registro en TrabajosPublicados
+        // TP sin registro todavía en TrabajosPublicados
         var tpPendientes = await _db.Evaluaciones
-            // StartsWith (no Contains): "TSP" también contiene "TP" y se colaba en la búsqueda de TPs
+            // StartsWith, no Contains: "TSP" también matchea "TP" con Contains
             .Where(e => e.Tipo.StartsWith("TP"))
             .Where(e => !_db.TrabajosPublicados.Any(t => t.MateriaEvaluacionId == e.Id))
             .ToListAsync();
 
         resultado.PendientesRevisados = tpPendientes.Count;
-        if (!tpPendientes.Any()) return resultado; // Si ya encontramos todos los TPs del semestre, no hacemos nada
+        if (!tpPendientes.Any()) return resultado;
 
         int procesadosConExito = 0;
         int alertasEnviadas = 0;
@@ -551,9 +523,7 @@ public class CatalogoScraperService
                 await _db.SaveChangesAsync();
                 Console.WriteLine($"¡Trabajo encontrado y guardado!: {eval.CodigoMateria}");
 
-                // =========================================================
-                // MÓDULO 5: DISPARAR NOTIFICACIONES A SUSCRIPTORES
-                // =========================================================
+                // Avisamos a los suscritos a esta materia
                 var estudiantesInteresados = await _db.EstudiantesSuscritos
                     .Where(e => e.MateriasInscritas.Contains(eval.CodigoMateria))
                     .ToListAsync();
@@ -608,9 +578,7 @@ public class CatalogoScraperService
 
 }
 
-// ========================================================================
-// Resultado del escaneo de TPs (lo usan el endpoint manual y el botón de Telegram)
-// ========================================================================
+// Resultado del escaneo de TPs: lo usan el endpoint manual y el botón de Telegram
 public class ResultadoEscaneoTp
 {
     /// <summary>true si ya había otro escaneo corriendo y este no se ejecutó.</summary>

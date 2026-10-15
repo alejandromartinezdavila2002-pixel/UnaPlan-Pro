@@ -69,7 +69,7 @@ public class TelegramLogger : ILogger
                 batchDetails = parts[1];
                 callbackId = Guid.NewGuid().ToString("N");
                 
-                // Resolución "Lazy" (Diferida) para evitar la Dependencia Circular en el arranque
+                // Resuelto a último momento para evitar dependencia circular en el arranque
                 var memoryCache = _serviceProvider.GetService<IMemoryCache>();
                 memoryCache?.Set(callbackId, batchDetails, TimeSpan.FromHours(24));
             }
@@ -115,17 +115,16 @@ public class TelegramLogger : ILogger
             );
         }
 
-        // Resolución "Lazy" del Dispatcher para evitar Dependencia Circular
         var dispatcher = _serviceProvider.GetService<TelegramLogDispatcher>();
         if (dispatcher != null)
         {
-            // Los logs que llegan a TelegramLogger ya están filtrados (son Errores, Warnings o Batches importantes).
-            // Por lo tanto, SIEMPRE los enviamos, ignorando si el Modo En Vivo está apagado.
+            // Lo que llega aquí ya pasó el filtro de IsEnabled (errores, warnings o batches), así que
+            // siempre se envía, sin importar si el Modo En Vivo está apagado
             dispatcher.EnqueueLog(telegramMessage, replyMarkup, bypassLiveMode: true);
         }
         else
         {
-            // Fallback (Solo si el Dispatcher no pudo resolverse durante el inicio)
+            // Por si el Dispatcher no se pudo resolver todavía durante el arranque
             Console.WriteLine($"[TelegramLogger Fallback] {telegramMessage.Replace("<b>", "").Replace("</b>", "")}");
         }
     }

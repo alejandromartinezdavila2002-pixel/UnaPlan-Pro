@@ -75,7 +75,7 @@ public class TelegramLogDispatcher : BackgroundService
                     catch (Exception ex) { _logger.LogError($"Error enviando log a Telegram: {ex.Message}"); }
                 }
 
-                // 🔥 Aquí aplicamos el buffer de 0.5 segundos para no ser bloqueados
+                // Medio segundo de margen para no ser bloqueados por Telegram
                 await Task.Delay(500, stoppingToken);
             }
         }

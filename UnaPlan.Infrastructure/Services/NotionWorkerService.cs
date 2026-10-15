@@ -24,21 +24,20 @@ public class NotionWorkerService : BackgroundService
     private readonly INotionClient _notionClient;
     private readonly string _databaseId;
 
-    // 🤖 NUEVO: Inyectamos el Dispatcher que maneja la cola Anti-Spam de Telegram
+    // Cola anti-spam de Telegram
     private readonly TelegramLogDispatcher _logDispatcher;
 
     public NotionWorkerService(
         ILogger<NotionWorkerService> logger,
         IConfiguration config,
         IServiceScopeFactory scopeFactory,
-        TelegramLogDispatcher logDispatcher) // ⬅️ Agregado al constructor
+        TelegramLogDispatcher logDispatcher)
     {
         _logger = logger;
         _config = config;
         _scopeFactory = scopeFactory;
-        _logDispatcher = logDispatcher; // ⬅️ Guardamos la referencia
+        _logDispatcher = logDispatcher;
 
-        // Inicializamos el cliente de Notion con el Token secreto
         _notionClient = NotionClientFactory.Create(new ClientOptions
         {
             AuthToken = _config["NotionSettings:Token"]
@@ -72,7 +71,7 @@ public class NotionWorkerService : BackgroundService
 
     private async Task ProcesarSolicitudesPendientesAsync(AppDbContext db)
     {
-        // 1. Consultar a Notion por filas que tengan Estado vacío (Sin procesar)
+        // Filas de Notion con el Estado vacío (sin procesar)
         var queryParams = new DatabasesQueryParameters
         {
             Filter = new CompoundFilter(
@@ -106,7 +105,6 @@ public class NotionWorkerService : BackgroundService
             {
                 try
                 {
-                    // 2. Extraer los datos de la fila de Notion de forma robusta
                     string nombre = ObtenerTextoDePropiedad(page.Properties, "Nombre Completo");
                     string correo = ObtenerTextoDePropiedad(page.Properties, "Correo");
                     string materiasRaw = ObtenerTextoDePropiedad(page.Properties, "Materias");
@@ -118,10 +116,8 @@ public class NotionWorkerService : BackgroundService
                         throw new Exception("El correo o las materias están vacías en Notion.");
                     }
 
-                    // 3. Procesar las materias (separadas por coma o espacio)
                     var listaMaterias = SuscripcionService.ParsearMaterias(materiasRaw);
 
-                    // 4. Buscar en la Base de Datos los planes, materiales y evaluaciones de esas materias
                     var planes = await db.PlanesDeCurso
                         .Where(p => listaMaterias.Contains(p.CodigoMateria))
                         .ToListAsync();
@@ -134,7 +130,6 @@ public class NotionWorkerService : BackgroundService
                         .Where(e => listaMaterias.Contains(e.CodigoMateria))
                         .ToListAsync();
 
-                    // 5. Mapear datos para el Excel
                     var materiasParaExcel = new List<ExcelGeneratorService.MateriaPlanillaDto>();
                     var materiasEncontradas = planes.Select(p => p.CodigoMateria).Distinct().ToList();
                     var materiasFaltantes = listaMaterias.Except(materiasEncontradas).ToList();
@@ -175,17 +170,14 @@ public class NotionWorkerService : BackgroundService
                         }
                     }
 
-                    // 6. Generar el archivo Excel en memoria RAM
                     byte[] excelBytes = excelService.GenerarPlanDeEvaluacionExcel(materiasParaExcel);
 
-                    // 7. Despachar el Correo Electrónico (El EmailService maneja internamente el asunto y cuerpo)
                     await emailService.EnviarPlanPersonalizadoAsync(correo, nombre, excelBytes, materiasFaltantes);
 
-                    // 7. Guardar o actualizar al estudiante en nuestra tabla "EstudiantesSuscritos" de Supabase
-                    //    (y enviarle los trabajos que ya estaban publicados de sus materias)
+                    // Suscribe al estudiante (y le manda los trabajos ya publicados de sus materias)
                     var suscripcion = await suscripcionService.SuscribirAsync(nombre, correo, listaMaterias);
 
-                    // --- CIERRE DEL CICLO: Actualizamos el Estado en Notion a "Enviado" ---
+                    // Marcamos el estado en Notion como "Enviado"
                     var updateProps = new Dictionary<string, PropertyValue>
                     {
                         { "Estado", new SelectPropertyValue { Select = new SelectOption { Name = "Enviado" } } }
@@ -209,7 +201,6 @@ public class NotionWorkerService : BackgroundService
                         mensajeExito += $" ⚠️ Falló el correo de trabajos publicados: {suscripcion.ErrorEnvioTrabajos}";
                     }
 
-                    // 🔥 NUEVO: Si el Modo en Vivo está encendido, mandamos este log limpio a la cola de Telegram
                     _logDispatcher.EnqueueLog(mensajeExito);
 
                     batchDetails.AppendLine(mensajeExito);
@@ -225,7 +216,7 @@ public class NotionWorkerService : BackgroundService
             }
         }
 
-        // --- ENVIAR LOTE A TELEGRAM SI HUBO ACTIVIDAD ---
+        // Si hubo actividad, mandamos el resumen del lote a Telegram
         if (procesadosConExito > 0 || procesadosConError > 0)
         {
             string summary = $"📋 {procesadosConExito} solicitudes procesadas en Notion. ({procesadosConError} errores)";

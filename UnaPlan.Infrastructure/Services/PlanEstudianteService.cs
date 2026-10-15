@@ -14,9 +14,7 @@ public class ResultadoPlanEstudiante
     public ResultadoSuscripcion? Suscripcion { get; set; }
 }
 
-// ========================================================================
 // Lógica de /api/estudiantes/solicitar-plan. La usan el endpoint y el panel de Telegram.
-// ========================================================================
 public class PlanEstudianteService
 {
     private readonly AppDbContext _db;
@@ -36,21 +34,19 @@ public class PlanEstudianteService
     {
         var r = new ResultadoPlanEstudiante();
 
-        // 1. Validación inicial
         if (string.IsNullOrWhiteSpace(codigosMaterias))
             return Invalido(r, "Debes proporcionar al menos un código de materia.");
 
         if (string.IsNullOrWhiteSpace(correo))
             return Invalido(r, "Debes proporcionar un correo electrónico.");
 
-        // 2. PARSER INDESTRUCTIBLE (compartido con Notion)
+        // El mismo parser que usa la suscripción por Notion
         var listaMaterias = SuscripcionService.ParsearMaterias(codigosMaterias);
         r.MateriasSolicitadas = listaMaterias;
 
         if (!listaMaterias.Any())
             return Invalido(r, "El formato de los códigos proporcionados no es válido o está vacío.");
 
-        // 3. Búsqueda en BD
         var materiasBd = await _db.PlanesDeCurso
             .Include(p => p.MaterialesDeApoyo)
             .Include(p => p.Evaluaciones)
@@ -65,13 +61,11 @@ public class PlanEstudianteService
             return r;
         }
 
-        // 4. DETECTAR MATERIAS FALTANTES (Teoría de Conjuntos)
         var codigosEncontrados = materiasBd.Select(m => m.CodigoMateria).ToList();
         r.MateriasNoEncontradas = listaMaterias.Except(codigosEncontrados).ToList();
 
         var listaParaExcel = new List<ExcelGeneratorService.MateriaPlanillaDto>();
 
-        // 5. Mapeo para Excel
         foreach (var materia in materiasBd)
         {
             if (materia.Evaluaciones != null && materia.Evaluaciones.Any())
@@ -104,13 +98,10 @@ public class PlanEstudianteService
             }
         }
 
-        // 6. Generamos Excel en Memoria
         var archivoExcelBytes = _excelService.GenerarPlanDeEvaluacionExcel(listaParaExcel);
-
-        // 7. Enviamos Correo con la lista de faltantes
         await _emailService.EnviarPlanPersonalizadoAsync(correo, nombreCompleto, archivoExcelBytes, r.MateriasNoEncontradas);
 
-        // 8. Suscribir al estudiante (igual que por Notion) y enviarle los trabajos ya publicados
+        // Lo suscribimos igual que si viniera de Notion, para que reciba los trabajos ya publicados
         r.Suscripcion = await _suscripcionService.SuscribirAsync(nombreCompleto, correo, listaMaterias);
 
         r.Estado = EstadoPlanEstudiante.Ok;

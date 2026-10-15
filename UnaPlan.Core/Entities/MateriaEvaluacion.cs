@@ -22,7 +22,7 @@ public class MateriaEvaluacion
     [Required]
     public string NombreMateria { get; set; } = string.Empty;
 
-    // ESTE es el campo que hace puente con la tabla PlanDeCurso
+    // Puente con la tabla PlanDeCurso
     public string? CodigoMateria { get; set; }
 
     // Relación original con el Plan de Curso corregida

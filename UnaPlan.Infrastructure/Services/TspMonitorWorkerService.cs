@@ -17,9 +17,9 @@ public class TspMonitorWorkerService : BackgroundService
     private readonly ILogger<TspMonitorWorkerService> _logger;
     private readonly IServiceScopeFactory _scopeFactory;
 
-    // Memoria caché interna (Protege la base de datos y la CPU)
+    // Estado interno, para no pegarle a la base de datos y a la CPU todo el rato
     private int _ultimoDiaRevisado = -1;
-    private bool _yaSeValidoHoy = false; // Bandera de estado para evitar el bug silencioso
+    private bool _yaSeValidoHoy = false;
     private bool _hayTspParaHoy = false;
     private List<string> _materiasTspEsperadas = new List<string>();
     private int _ultimoMinutoEscaneado = -1;
@@ -35,7 +35,7 @@ public class TspMonitorWorkerService : BackgroundService
         var startVeTime = DateTime.UtcNow.AddHours(-4);
         if (startVeTime.DayOfWeek == DayOfWeek.Saturday)
         {
-            // 🔥 PRUEBA: Usamos LogWarning temporalmente para forzar que este mensaje llegue a tu Telegram sí o sí
+            // LogWarning a propósito, para que llegue al Telegram
             _logger.LogWarning("🕵️‍♂️ Vigilante de TSP Activado (Modo Sabatino Inteligente).");
         }
         else
@@ -49,7 +49,7 @@ public class TspMonitorWorkerService : BackgroundService
             {
                 var veTime = DateTime.UtcNow.AddHours(-4);
 
-                // 1. Reseteo universal de variables al cambiar de día (sin importar la hora)
+                // Si cambió el día, reseteamos todo (sin importar la hora)
                 if (veTime.Day != _ultimoDiaRevisado)
                 {
                     _ultimoDiaRevisado = veTime.Day;
@@ -59,25 +59,24 @@ public class TspMonitorWorkerService : BackgroundService
                     _ultimoMinutoEscaneado = -1;
                 }
 
-                // 2. Ahorro extremo de CPU en Render para días de semana
+                // Si no es sábado no hay nada que hacer, así que dormimos el worker 1 hora
                 if (veTime.DayOfWeek != DayOfWeek.Saturday)
                 {
-                    // Si no es sábado, dormimos el Worker por 1 hora entera
                     await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
-                    continue; // Salta el resto del código y vuelve a empezar el bucle
+                    continue;
                 }
 
-                // 3. FASE 1: PRE-VALIDACIÓN (A partir de las 5:00 AM usando la bandera booleana)
+                // A partir de las 5:00 AM, validamos qué TSP se esperan hoy
                 if (veTime.Hour >= 5 && !_yaSeValidoHoy)
                 {
                     await ValidarTspProgramadosParaHoyAsync(veTime, stoppingToken);
                     _yaSeValidoHoy = true;
                 }
 
-                // 4. FASE 2: BÚSQUEDA Y EXTRACCIÓN DINÁMICA
+                // Desde las 6:00 AM, escaneamos el Drive hasta encontrar los TSP esperados
                 if (_hayTspParaHoy && veTime.Hour >= 6)
                 {
-                    // Límite de Cordura (Hard Stop): Las 14:00 (2:00 PM)
+                    // Corte duro a las 14:00 (2:00 PM)
                     if (veTime.Hour >= 14)
                     {
                         _logger.LogWarning($"[TSP] ⚠️ Límite de las 2:00 PM alcanzado. La universidad no publicó los TSP de: {string.Join(", ", _materiasTspEsperadas)}. Abortando búsqueda.");
@@ -95,11 +94,10 @@ public class TspMonitorWorkerService : BackgroundService
 
                             using var scope = _scopeFactory.CreateScope();
 
-                            // Instanciamos el scraper real y le pasamos la fecha de hoy
                             var scraper = scope.ServiceProvider.GetRequiredService<CatalogoScraperService>();
                             await scraper.EscanearTspAsync(veTime.Date);
 
-                            // Evaluamos qué se encontró para hacer el Cierre Prematuro si aplica
+                            // Revisamos si ya se encontraron todos, para cerrar antes de las 2 PM
                             await ActualizarMateriasFaltantesAsync(stoppingToken);
                         }
                     }

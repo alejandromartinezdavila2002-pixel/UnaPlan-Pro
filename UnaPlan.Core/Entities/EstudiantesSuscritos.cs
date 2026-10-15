@@ -16,13 +16,12 @@ public class EstudiantesSuscritos
     [EmailAddress]
     public string Correo { get; set; } = string.Empty;
 
-    // Magia de PostgreSQL + EF Core 9: Esto se guardará como un text[] en la base de datos
+    // Postgres lo guarda como text[] gracias al mapeo de EF Core
     public List<string> MateriasInscritas { get; set; } = new();
 
     public DateTime FechaSuscripcion { get; set; } = DateTime.UtcNow;
 
-    // NUEVA COLUMNA CRM: Registra la fecha del ultimátum (15 días). 
-    // Es Nullable (DateTime?) porque los estudiantes activos no tendrán advertencias pendientes.
+    // Fecha del ultimátum (15 días). Null si el estudiante está activo y no tiene advertencias pendientes.
     public DateTime? FechaAdvertencia { get; set; }
 
     // CRM: cuándo recibió la convocatoria del periodo actual. Null = pendiente.

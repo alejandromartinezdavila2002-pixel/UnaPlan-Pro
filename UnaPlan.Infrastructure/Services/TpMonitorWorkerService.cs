@@ -17,7 +17,7 @@ public class TpMonitorWorkerService : BackgroundService
 
     private int _ultimoDiaRevisado = -1;
     private bool _hayTpsPendientes = false;
-    private bool _yaSeValidoHoy = false; // Bandera de estado para evitar el bug silencioso
+    private bool _yaSeValidoHoy = false;
     private int _ultimoMinutoEscaneado = -1;
 
     public TpMonitorWorkerService(ILogger<TpMonitorWorkerService> logger, IServiceScopeFactory scopeFactory)
@@ -31,7 +31,7 @@ public class TpMonitorWorkerService : BackgroundService
         var startVeTime = DateTime.UtcNow.AddHours(-4);
         if (startVeTime.DayOfWeek == DayOfWeek.Saturday)
         {
-            // 🔥 PRUEBA: Usamos LogWarning temporalmente para forzar que este mensaje llegue a tu Telegram sí o sí
+            // LogWarning a propósito, para que llegue al Telegram
             _logger.LogWarning("🟢 Micro-Worker TP Activado (Modo Sabatino: 6 AM - 2 PM).");
         }
         else
@@ -45,7 +45,7 @@ public class TpMonitorWorkerService : BackgroundService
             {
                 var veTime = DateTime.UtcNow.AddHours(-4);
 
-                // 1. Reseteo universal de variables al cambiar de día (sin importar la hora)
+                // Si cambió el día, reseteamos todo (sin importar la hora)
                 if (veTime.Day != _ultimoDiaRevisado)
                 {
                     _ultimoDiaRevisado = veTime.Day;
@@ -54,25 +54,24 @@ public class TpMonitorWorkerService : BackgroundService
                     _ultimoMinutoEscaneado = -1;
                 }
 
-                // 2. Ahorro extremo de CPU en Render para días de semana
+                // Si no es sábado no hay nada que hacer, así que dormimos el worker 1 hora
                 if (veTime.DayOfWeek != DayOfWeek.Saturday)
                 {
-                    // Si no es sábado, dormimos el Worker por 1 hora entera
                     await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
-                    continue; // Salta el resto del código y vuelve a empezar el bucle
+                    continue;
                 }
 
-                // 3. Fase 1: Pre-validación a partir de las 6:00 AM usando la bandera booleana
+                // A partir de las 6:00 AM, validamos si quedan TPs pendientes
                 if (veTime.Hour >= 6 && !_yaSeValidoHoy)
                 {
                     await ValidarTpsPendientesGlobalesAsync(stoppingToken);
                     _yaSeValidoHoy = true;
                 }
 
-                // 4. Fase 2: Patrullaje de 06:00 AM a 02:00 PM
+                // Patrullaje de 6:00 AM a 2:00 PM
                 if (_hayTpsPendientes && veTime.Hour >= 6)
                 {
-                    // Límite de Cordura (Hard Stop): Las 14:00 (2:00 PM) unificado con el TSP
+                    // Mismo corte de las 14:00 (2:00 PM) que usa el TSP
                     if (veTime.Hour >= 14)
                     {
                         _logger.LogWarning("[TP] ⚠️ Límite de las 2:00 PM alcanzado. Abortando búsqueda de TPs.");

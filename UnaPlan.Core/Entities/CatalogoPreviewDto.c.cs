@@ -1,6 +1,6 @@
 ﻿namespace UnaPlan.Core.Entities;
 
-// DTO (Data Transfer Object): Un objeto ligero solo para transportar datos a la pantalla
+// Para mandar datos a la pantalla sin exponer las entidades directamente
 public class CatalogoPreviewDto
 {
     public string CodigoMateria { get; set; } = string.Empty;
