@@ -468,16 +468,17 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 
 
 
-// Lo dispara GitHub Actions una vez por semana. Si "Cartelera:SyncToken" está configurado
-// (variable de entorno CARTELERA_SYNC_TOKEN en Render), exigimos ese token en la cabecera
-// X-Sync-Token. Sin token configurado el endpoint queda abierto, como estaba antes.
+// Lo dispara GitHub Actions una vez por semana. Si hay token configurado exigimos la cabecera
+// X-Sync-Token; sin token el endpoint queda abierto, como estaba antes.
+// En Render la variable de entorno puede llamarse "Cartelera__SyncToken" (doble guion bajo,
+// que es como .NET mapea la clave anidada) o "CARTELERA_SYNC_TOKEN"; aceptamos las dos.
 app.MapPost("/api/notion/sync-cartelera", async (
     NotionPublisherService publisherService,
     IConfiguration config,
     HttpRequest request,
     ILogger<Program> logger) =>
 {
-    var tokenEsperado = config["Cartelera:SyncToken"];
+    var tokenEsperado = config["Cartelera:SyncToken"] ?? config["CARTELERA_SYNC_TOKEN"];
 
     if (!string.IsNullOrWhiteSpace(tokenEsperado))
     {
