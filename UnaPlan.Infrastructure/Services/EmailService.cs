@@ -22,10 +22,16 @@ public class EmailService
     private readonly GmailService _gmailService;
     private readonly ILogger<EmailService> _logger;
 
-    // Contador del guardián de límite diario
+    // Contador del guardián de límite diario. Lo comparten los workers y los endpoints
+    // (que corren en paralelo), por eso va con candado. El "día" es el de Venezuela, para
+    // que el botón de estatus de Telegram muestre los correos de hoy tal como los vemos aquí.
+    // Vive en memoria: si Render reinicia, vuelve a cero.
+    private static readonly object _candadoContador = new();
     private static int _correosEnviadosHoy = 0;
-    private static DateTime _fechaUltimoEnvio = DateTime.Today;
+    private static DateTime _fechaUltimoEnvio = HoyVenezuela;
     private const int LIMITE_DIARIO_SEGURO = 450; // Dejamos 50 de margen para el límite de 500 de Google
+
+    private static DateTime HoyVenezuela => DateTime.UtcNow.AddHours(-4).Date;
 
     public EmailService(IConfiguration config, GmailService gmailService, ILogger<EmailService> logger)
     {
@@ -36,19 +42,39 @@ public class EmailService
 
     private void VerificarYRegistrarEnvio()
     {
-        // Si cambió el día desde el último envío, reseteamos el contador
-        if (DateTime.Today > _fechaUltimoEnvio)
+        lock (_candadoContador)
+        {
+            ReiniciarContadorSiCambioElDia();
+
+            if (_correosEnviadosHoy >= LIMITE_DIARIO_SEGURO)
+            {
+                throw new InvalidOperationException($"Límite diario de seguridad de {LIMITE_DIARIO_SEGURO} correos alcanzado. Por favor, reanude los envíos masivos mañana.");
+            }
+
+            // Cuenta el intento, aunque Gmail luego falle: el guardián prefiere quedarse corto
+            _correosEnviadosHoy++;
+        }
+    }
+
+    // Llamar siempre dentro del candado
+    private static void ReiniciarContadorSiCambioElDia()
+    {
+        var hoy = HoyVenezuela;
+        if (hoy > _fechaUltimoEnvio)
         {
             _correosEnviadosHoy = 0;
-            _fechaUltimoEnvio = DateTime.Today;
+            _fechaUltimoEnvio = hoy;
         }
+    }
 
-        if (_correosEnviadosHoy >= LIMITE_DIARIO_SEGURO)
+    /// <summary>Correos que el guardián lleva hoy (día de Venezuela) y su tope. Lo usa el estatus de Telegram.</summary>
+    public static (int Enviados, int Limite) ObtenerContadorDeHoy()
+    {
+        lock (_candadoContador)
         {
-            throw new InvalidOperationException($"Límite diario de seguridad de {LIMITE_DIARIO_SEGURO} correos alcanzado. Por favor, reanude los envíos masivos mañana.");
+            ReiniciarContadorSiCambioElDia();
+            return (_correosEnviadosHoy, LIMITE_DIARIO_SEGURO);
         }
-
-        _correosEnviadosHoy++;
     }
 
     // Versión vieja, antes de pasar el GmailService a Singleton (queda por si hay que volver atrás)

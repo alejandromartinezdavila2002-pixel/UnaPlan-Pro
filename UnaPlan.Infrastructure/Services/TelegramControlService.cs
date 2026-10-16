@@ -24,6 +24,7 @@ public class TelegramControlService
     // Telegram__PinPeriodoAcademico (Render) / user-secrets (local). Nunca en el repo.
     private readonly string? _pinPeriodo;
 
+    public const string BotonEstatus = "📊 Estatus";
     public const string BotonBuscarTps = "🔎 Buscar TPs ahora";
     public const string BotonPeriodoAcademico = "🎓 Periodo Académico";
     private const string BotonEncenderLogs = "🟢 Encender Logs en Vivo";
@@ -119,7 +120,7 @@ public class TelegramControlService
             return;
         }
 
-        bool esBotonTeclado = texto == BotonBuscarTps || texto == BotonEncenderLogs || texto == BotonApagarLogs;
+        bool esBotonTeclado = texto == BotonEstatus || texto == BotonBuscarTps || texto == BotonEncenderLogs || texto == BotonApagarLogs;
 
         // Respuesta a un paso del panel (PIN, nombre, correo, códigos)
         if (!esBotonTeclado && sesion != null)
@@ -135,6 +136,12 @@ public class TelegramControlService
     public async Task ProcesarComandoTecladoAsync(long chatId, string comandoTexto)
     {
         if (!EsAdmin(chatId)) return;
+
+        if (comandoTexto == BotonEstatus)
+        {
+            await MostrarEstatusAsync(chatId);
+            return;
+        }
 
         if (comandoTexto == BotonBuscarTps)
         {
@@ -176,6 +183,91 @@ public class TelegramControlService
         catch (Exception ex)
         {
             _logger.LogError($"Error al actualizar el teclado de Telegram: {ex.Message}");
+        }
+    }
+
+    // ---- Botón "📊 Estatus": foto rápida del sistema (solo lectura, no dispara nada) ----
+    private async Task MostrarEstatusAsync(long chatId)
+    {
+        try
+        {
+            using var scope = _scopeFactory.CreateScope();
+            var servicio = scope.ServiceProvider.GetRequiredService<EstatusService>();
+            var estatus = await servicio.ObtenerAsync();
+
+            await EnviarSeguroAsync(chatId, FormatearEstatus(estatus));
+            _logger.LogInformation($"[Telegram] El Administrador {chatId} consultó el estatus.");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Telegram] Error consultando el estatus.");
+            await EnviarSeguroAsync(chatId, $"❌ No pude consultar el estatus: {Html(ex.GetBaseException().Message)}");
+        }
+    }
+
+    private static readonly string[] DiasCortos = { "dom", "lun", "mar", "mié", "jue", "vie", "sáb" };
+
+    private static string FechaCorta(DateTime fecha) => $"{DiasCortos[(int)fecha.DayOfWeek]} {fecha:dd/MM}";
+
+    public static string FormatearEstatus(EstatusSistema e)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("📊 <b>Estatus de UnaPlan</b>");
+        sb.AppendLine($"<i>{FechaCorta(e.HoraVenezuela)} · {e.HoraVenezuela:HH:mm} (hora de Venezuela)</i>");
+
+        // Estudiantes
+        sb.AppendLine();
+        sb.AppendLine("👥 <b>Estudiantes</b>");
+        sb.AppendLine($"• Suscritos: <b>{e.Estudiantes}</b> ({e.EstudiantesConMaterias} con materias · {e.EstudiantesSinMaterias} sin materias)");
+        sb.AppendLine($"• Se inscribieron hoy: <b>{e.InscritosHoy}</b>");
+
+        // TSP y TP del periodo
+        AgregarBloqueEvaluaciones(sb, "📝", "TSP", e.Tsp, e.HoraVenezuela.Date);
+        AgregarBloqueEvaluaciones(sb, "📄", "TP", e.Tp, e.HoraVenezuela.Date);
+
+        // Correos
+        sb.AppendLine();
+        sb.AppendLine("📧 <b>Correos de hoy</b>");
+        sb.AppendLine($"• Enviados: <b>{e.CorreosHoy}</b> / {e.LimiteCorreosDiario} · Quedan: <b>{e.CorreosRestantes}</b>");
+        if (e.ContadorDesdeVenezuela is { } desde)
+            sb.AppendLine($"  <i>⚠️ El servidor se reinició a las {desde:HH:mm}; el contador cuenta desde ahí.</i>");
+
+        var c = e.Convocatoria;
+        var estadoConv = c.EnCurso ? " · ⏳ enviándose ahora" : "";
+        sb.AppendLine($"• Convocatoria: {c.EnviadosUltimas24h}/{c.LimiteDiario} en 24 h · Pendientes: <b>{c.Pendientes}</b>{estadoConv}");
+
+        return sb.ToString();
+    }
+
+    private static void AgregarBloqueEvaluaciones(StringBuilder sb, string icono, string tipo, EstatusEvaluaciones ev, DateTime hoy)
+    {
+        sb.AppendLine();
+        if (ev.Total == 0)
+        {
+            sb.AppendLine($"{icono} <b>{tipo}</b>: no hay calendario cargado.");
+            return;
+        }
+
+        sb.AppendLine($"{icono} <b>{tipo} del periodo</b> ({ev.Total})");
+        sb.AppendLine($"• Encontrados: <b>{ev.Encontrados}</b> · Faltan: <b>{ev.Faltan}</b>");
+
+        if (ev.Faltan > 0)
+        {
+            var partes = new List<string>();
+            if (ev.FaltanFechasPasadas > 0) partes.Add($"{ev.FaltanFechasPasadas} de fechas pasadas");
+            if (ev.FaltanHoy > 0) partes.Add($"{ev.FaltanHoy} de hoy");
+            if (ev.FaltanProximos > 0) partes.Add($"{ev.FaltanProximos} por venir");
+            sb.AppendLine($"  <i>{string.Join(" · ", partes)}</i>");
+        }
+
+        if (ev.TotalHoy > 0)
+            sb.AppendLine($"• Hoy: {ev.EncontradosHoy}/{ev.TotalHoy} encontrados{(ev.EncontradosHoy == ev.TotalHoy ? " ✅" : "")}");
+
+        if (ev.ProximaFecha is { } proxima)
+        {
+            var dias = (proxima - hoy).Days;
+            var cuando = dias == 1 ? "mañana" : $"en {dias} días";
+            sb.AppendLine($"• Próximos: {FechaCorta(proxima)} ({cuando}) · {ev.ProximaCantidad} {tipo}");
         }
     }
 
@@ -967,8 +1059,8 @@ public class TelegramControlService
 
         return new ReplyKeyboardMarkup(new[]
         {
+            new KeyboardButton[] { BotonEstatus, BotonBuscarTps },
             new KeyboardButton[] { textoBoton },
-            new KeyboardButton[] { BotonBuscarTps },
             new KeyboardButton[] { BotonPeriodoAcademico }
         })
         {

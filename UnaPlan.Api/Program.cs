@@ -121,6 +121,7 @@ builder.Services.AddScoped<SuscripcionService>();
 // Los usan tanto los endpoints como el panel de Telegram.
 builder.Services.AddScoped<PeriodoAcademicoService>();
 builder.Services.AddScoped<PlanEstudianteService>();
+builder.Services.AddScoped<EstatusService>(); // Botón "📊 Estatus" de Telegram
 
 
 builder.Services.AddHostedService<SupabaseKeepAliveService>();
