@@ -468,8 +468,32 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 
 
 
-app.MapPost("/api/notion/sync-cartelera", async (NotionPublisherService publisherService) =>
+// Lo dispara GitHub Actions una vez por semana. Si "Cartelera:SyncToken" está configurado
+// (variable de entorno CARTELERA_SYNC_TOKEN en Render), exigimos ese token en la cabecera
+// X-Sync-Token. Sin token configurado el endpoint queda abierto, como estaba antes.
+app.MapPost("/api/notion/sync-cartelera", async (
+    NotionPublisherService publisherService,
+    IConfiguration config,
+    HttpRequest request,
+    ILogger<Program> logger) =>
 {
+    var tokenEsperado = config["Cartelera:SyncToken"];
+
+    if (!string.IsNullOrWhiteSpace(tokenEsperado))
+    {
+        var tokenRecibido = request.Headers["X-Sync-Token"].ToString();
+
+        if (!string.Equals(tokenRecibido, tokenEsperado, StringComparison.Ordinal))
+        {
+            logger.LogWarning("🔒 Intento de sincronizar la Cartelera con un token inválido o ausente.");
+            return Results.Unauthorized();
+        }
+    }
+    else
+    {
+        logger.LogWarning("⚠️ 'Cartelera:SyncToken' no está configurado: el endpoint de sincronización está abierto.");
+    }
+
     await publisherService.SincronizarCarteleraAsync();
     return Results.Ok(new { mensaje = "Cartelera sincronizada correctamente con Notion." });
 })

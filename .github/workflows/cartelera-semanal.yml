@@ -1,0 +1,30 @@
+name: Publicar Cartelera semanal
+
+# Este es ahora el UNICO disparador de la publicacion semanal. Antes vivia dentro de
+# NotionPublisherService como un temporizador interno, pero dependia de banderas en memoria
+# que se pierden en cada reinicio de Render, y del servicio estando despierto el lunes.
+#
+# El minuto 35 es intencional: GitHub avisa que los workflows programados se retrasan en los
+# picos de carga, y la hora en punto es justo cuando mas carga hay.
+
+on:
+  schedule:
+    # Lunes 13:35 UTC = 09:35 en Venezuela (UTC-4).
+    - cron: '35 13 * * 1'
+  workflow_dispatch:
+
+jobs:
+  publicar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Despertar la API antes de publicar
+        run: |
+          curl -fsS --max-time 120 --retry 5 --retry-delay 15 --retry-connrefused \
+            https://unaplanapi.onrender.com/api/ping
+
+      - name: Sincronizar la Cartelera con Notion
+        run: |
+          curl -fsS --max-time 300 -X POST \
+            -H "X-Sync-Token: ${{ secrets.CARTELERA_SYNC_TOKEN }}" \
+            https://unaplanapi.onrender.com/api/notion/sync-cartelera

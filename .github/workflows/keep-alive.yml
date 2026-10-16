@@ -1,0 +1,31 @@
+name: Mantener despierta la API
+
+# El plan gratuito de Render apaga el servicio tras ~15 minutos sin trafico entrante.
+# Como NotionWorkerService consulta Notion buscando solicitudes nuevas, dormido no procesa
+# nada y el estudiante se queda esperando su plan. Este ping lo mantiene en pie.
+#
+# Nota de presupuesto: Render da 750 horas de instancia al mes por workspace y los servicios
+# dormidos no las consumen. Despierto 24/7 son ~744 h en un mes de 31 dias, asi que esto
+# cabe mientras UnaPlanApi sea el UNICO servicio gratuito del workspace. Si algun dia se
+# levanta un segundo, hay que apagar este workflow o se suspenden todos hasta el mes siguiente.
+
+on:
+  schedule:
+    # Cada 14 minutos, por debajo de la ventana de 15 que usa Render para dormir el servicio.
+    - cron: '*/14 * * * *'
+  workflow_dispatch:
+
+# Si un ping se retrasa y se solapa con el siguiente, descartamos el viejo.
+concurrency:
+  group: keep-alive
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Despertar la API
+        run: |
+          curl -fsS --max-time 90 --retry 3 --retry-delay 10 --retry-connrefused \
+            https://unaplanapi.onrender.com/api/ping

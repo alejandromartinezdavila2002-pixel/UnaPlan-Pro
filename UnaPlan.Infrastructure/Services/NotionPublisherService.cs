@@ -21,10 +21,6 @@ public class NotionPublisherService : BackgroundService
     private readonly ILogger<NotionPublisherService> _logger;
     private readonly TelegramLogDispatcher _logDispatcher;
 
-    // Memoria para evitar publicaciones duplicadas el mismo lunes
-    private int _ultimoDiaRevisado = -1;
-    private bool _yaSePublicoEstaSemana = false;
-
     // Si la Cartelera activa llega a esta cantidad de entradas, avisamos por Telegram
     // antes de que Notion agote el cupo de bloques gratuito del workspace.
     private const int UmbralAlertaBloques = 150;
@@ -38,52 +34,18 @@ public class NotionPublisherService : BackgroundService
         _logDispatcher = logDispatcher;
     }
 
-    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    // La publicación semanal ya NO se agenda aquí dentro. Antes este bucle esperaba al lunes
+    // durmiendo 12 horas por vuelta, pero en el plan gratuito de Render el servicio se apaga a los
+    // ~15 minutos de inactividad, así que nunca llegaba despierto al lunes: la cartelera jamás se
+    // publicó. Ahora el disparo viene de fuera (GitHub Actions -> POST /api/notion/sync-cartelera),
+    // que además sobrevive a los reinicios y no depende de banderas en memoria.
+    protected override Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        _logger.LogInformation("🤖 Motor Automático de Notion Activado (Patrullaje de Lunes).");
+        _logger.LogInformation(
+            "🤖 Publicador de Notion listo. La sincronización semanal se dispara desde el cron externo " +
+            "(POST /api/notion/sync-cartelera), no desde un temporizador interno.");
 
-        while (!stoppingToken.IsCancellationRequested)
-        {
-            try
-            {
-                var veTime = DateTime.UtcNow.AddHours(-4);
-
-                // Los domingos dejamos todo listo para publicar al día siguiente
-                if (veTime.DayOfWeek == DayOfWeek.Sunday && veTime.Day != _ultimoDiaRevisado)
-                {
-                    _ultimoDiaRevisado = veTime.Day;
-                    _yaSePublicoEstaSemana = false;
-                    _logger.LogInformation("[Notion-Worker] 🔄 Reseteo dominical completado. Listo para publicar mañana.");
-                }
-
-                // Si no es lunes no hay nada que hacer, dormimos 12 horas
-                if (veTime.DayOfWeek != DayOfWeek.Monday)
-                {
-                    await Task.Delay(TimeSpan.FromHours(12), stoppingToken);
-                    continue;
-                }
-
-                // Lunes a partir de las 6:00 AM
-                if (veTime.DayOfWeek == DayOfWeek.Monday && veTime.Hour >= 6 && !_yaSePublicoEstaSemana)
-                {
-                    _logger.LogInformation("[Notion-Worker] 🚀 ¡Es Lunes! Iniciando sincronización automática de la cartelera...");
-
-                    await SincronizarCarteleraAsync();
-
-                    _yaSePublicoEstaSemana = true;
-                    _ultimoDiaRevisado = veTime.Day;
-                    _logger.LogInformation("[Notion-Worker] ✅ Cartelera sincronizada. El motor se apaga hasta el próximo lunes.");
-                }
-
-                // Si es Lunes pero aún no son las 6:00 AM, verificamos cada hora (muy ligero)
-                await Task.Delay(TimeSpan.FromHours(1), stoppingToken);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "❌ Error crítico en el Motor Automático de Notion.");
-                await Task.Delay(TimeSpan.FromMinutes(10), stoppingToken);
-            }
-        }
+        return Task.CompletedTask;
     }
 
     public async Task SincronizarCarteleraAsync()
