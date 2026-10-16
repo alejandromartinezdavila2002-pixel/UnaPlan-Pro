@@ -195,7 +195,7 @@ public class TelegramControlService
             var servicio = scope.ServiceProvider.GetRequiredService<EstatusService>();
             var estatus = await servicio.ObtenerAsync();
 
-            await EnviarSeguroAsync(chatId, FormatearEstatus(estatus));
+            await EnviarSeguroAsync(chatId, FormatearEstatus(estatus), BotonesEstatus());
             _logger.LogInformation($"[Telegram] El Administrador {chatId} consultó el estatus.");
         }
         catch (Exception ex)
@@ -268,6 +268,291 @@ public class TelegramControlService
             var dias = (proxima - hoy).Days;
             var cuando = dias == 1 ? "mañana" : $"en {dias} días";
             sb.AppendLine($"• Próximos: {FechaCorta(proxima)} ({cuando}) · {ev.ProximaCantidad} {tipo}");
+        }
+    }
+
+    // ---- Desgloses del estatus: botones inline con prefijo "es:" ----
+    // es:ver          → vuelve a mandar el estatus actualizado
+    // es:est          → lista de estudiantes
+    // es:tsp / es:tp  → resumen por fecha, con un botón por fecha
+    // es:tsp:yyyyMMdd → detalle por materia de esa fecha
+    public const string PrefijoEstatus = "es:";
+    private const string CbEstActualizar = "es:ver";
+    private const string CbEstEstudiantes = "es:est";
+    private const string CbEstTsp = "es:tsp";
+    private const string CbEstTp = "es:tp";
+
+    private const int MaxEstudiantesListados = 150;
+    private const int MaxCaracteresMensaje = 3800; // Telegram corta en 4096
+
+    public static bool EsCallbackDelEstatus(string? data) =>
+        data != null && data.StartsWith(PrefijoEstatus, StringComparison.Ordinal);
+
+    private static InlineKeyboardMarkup BotonesEstatus() =>
+        new(new[]
+        {
+            new[] { InlineKeyboardButton.WithCallbackData("👥 Ver estudiantes", CbEstEstudiantes) },
+            new[]
+            {
+                InlineKeyboardButton.WithCallbackData("📝 Ver TSP", CbEstTsp),
+                InlineKeyboardButton.WithCallbackData("📄 Ver TP", CbEstTp)
+            },
+            new[] { InlineKeyboardButton.WithCallbackData("🔄 Actualizar", CbEstActualizar) }
+        });
+
+    public async Task ProcesarCallbackEstatusAsync(CallbackQuery query)
+    {
+        var chatId = query.Message?.Chat.Id ?? query.From.Id;
+
+        if (!EsAdmin(chatId))
+        {
+            await ResponderCallbackAsync(query.Id, "⛔ No autorizado");
+            return;
+        }
+
+        // A diferencia del panel, aquí NO quitamos los botones: se pueden tocar varias veces
+        await ResponderCallbackAsync(query.Id);
+
+        try
+        {
+            var partes = (query.Data ?? "").Split(':');
+            var accion = partes.Length > 1 ? partes[1] : "";
+
+            switch (accion)
+            {
+                case "ver":
+                    await MostrarEstatusAsync(chatId);
+                    break;
+
+                case "est":
+                    await MostrarEstudiantesAsync(chatId);
+                    break;
+
+                case "tsp":
+                case "tp":
+                    var tipo = accion.ToUpperInvariant();
+                    if (partes.Length > 2 && DateTime.TryParseExact(partes[2], "yyyyMMdd",
+                            System.Globalization.CultureInfo.InvariantCulture,
+                            System.Globalization.DateTimeStyles.None, out var fecha))
+                        await MostrarDetalleFechaAsync(chatId, tipo, fecha);
+                    else
+                        await MostrarResumenEvaluacionesAsync(chatId, tipo);
+                    break;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "[Telegram] Error mostrando un desglose del estatus.");
+            await EnviarSeguroAsync(chatId, $"❌ No pude cargar el detalle: {Html(ex.GetBaseException().Message)}");
+        }
+    }
+
+    private async Task MostrarEstudiantesAsync(long chatId)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var servicio = scope.ServiceProvider.GetRequiredService<EstatusService>();
+        var estudiantes = await servicio.ListarEstudiantesAsync();
+
+        var hoy = EstatusService.HoyVenezuela();
+        bool EsDeHoy(EstudianteResumen e) => EstatusService.AVenezuela(e.FechaSuscripcion).Date == hoy;
+
+        var conMaterias = estudiantes.Where(e => e.Materias.Count > 0).ToList();
+        var sinMaterias = estudiantes.Where(e => e.Materias.Count == 0).ToList();
+
+        var lineas = new List<string>
+        {
+            $"👥 <b>Estudiantes ({estudiantes.Count})</b>",
+            $"🆕 Se inscribieron hoy: {estudiantes.Count(EsDeHoy)} · Con materias: {conMaterias.Count} · Sin materias: {sinMaterias.Count}"
+        };
+
+        if (estudiantes.Count == 0)
+        {
+            lineas.Add("");
+            lineas.Add("<i>Todavía no hay estudiantes suscritos.</i>");
+        }
+
+        int listados = 0;
+
+        void AgregarGrupo(string titulo, List<EstudianteResumen> grupo, bool conDetalleMaterias)
+        {
+            if (grupo.Count == 0) return;
+            lineas.Add("");
+            lineas.Add($"<b>{titulo} ({grupo.Count})</b>");
+
+            foreach (var e in grupo)
+            {
+                if (listados >= MaxEstudiantesListados) return;
+                listados++;
+
+                var nuevo = EsDeHoy(e) ? " 🆕" : "";
+                var desde = EstatusService.AVenezuela(e.FechaSuscripcion);
+                lineas.Add($"• <b>{Html(e.Nombre)}</b>{nuevo} — <code>{Html(e.Correo)}</code>");
+
+                if (conDetalleMaterias)
+                {
+                    lineas.Add($"   📚 {Html(string.Join(", ", e.Materias))} · desde {desde:dd/MM}");
+                }
+                else
+                {
+                    var convocatoria = e.FechaConvocatoria is { } fc
+                        ? $"✉️ convocatoria recibida el {EstatusService.AVenezuela(fc):dd/MM}"
+                        : "⏳ convocatoria pendiente";
+                    lineas.Add($"   {convocatoria}");
+                }
+            }
+        }
+
+        AgregarGrupo("Con materias", conMaterias, conDetalleMaterias: true);
+        AgregarGrupo("Sin materias", sinMaterias, conDetalleMaterias: false);
+
+        if (estudiantes.Count > listados)
+        {
+            lineas.Add("");
+            lineas.Add($"<i>...y {estudiantes.Count - listados} más (se muestran los {MaxEstudiantesListados} más recientes).</i>");
+        }
+
+        await EnviarEnPartesAsync(chatId, lineas, BotonVolverEstatus());
+    }
+
+    private async Task MostrarResumenEvaluacionesAsync(long chatId, string tipo)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var servicio = scope.ServiceProvider.GetRequiredService<EstatusService>();
+        var evaluaciones = await servicio.ListarEvaluacionesAsync(tipo);
+
+        var icono = tipo == "TSP" ? "📝" : "📄";
+        if (evaluaciones.Count == 0)
+        {
+            await EnviarSeguroAsync(chatId, $"{icono} <b>{tipo}</b>: no hay calendario cargado.", BotonVolverEstatus());
+            return;
+        }
+
+        var hoy = EstatusService.HoyVenezuela();
+        var porFecha = evaluaciones.GroupBy(e => e.Fecha).OrderBy(g => g.Key).ToList();
+
+        var lineas = new List<string>
+        {
+            $"{icono} <b>{tipo} del periodo</b> — {evaluaciones.Count(e => e.Encontrado)}/{evaluaciones.Count} encontrados",
+            "<i>Toca una fecha para ver cada materia.</i>"
+        };
+
+        void AgregarSeccion(string titulo, IEnumerable<IGrouping<DateTime, EvaluacionResumen>> grupos)
+        {
+            var lista = grupos.ToList();
+            if (lista.Count == 0) return;
+            lineas.Add("");
+            lineas.Add($"<b>{titulo}</b>");
+            foreach (var g in lista)
+            {
+                int enc = g.Count(e => e.Encontrado), total = g.Count();
+                var marca = enc == total ? "✅" : enc == 0 ? "⏳" : "🟡";
+                lineas.Add($"{marca} {FechaCorta(g.Key)}{TextoCuando(g.Key, hoy)} — {enc}/{total}");
+            }
+        }
+
+        AgregarSeccion("⌛ Fechas pasadas", porFecha.Where(g => g.Key < hoy));
+        AgregarSeccion("📅 Hoy y próximas", porFecha.Where(g => g.Key >= hoy));
+
+        // Un botón por fecha (2 por fila) + volver
+        var filas = porFecha
+            .Select(g =>
+            {
+                int enc = g.Count(e => e.Encontrado), total = g.Count();
+                var marca = enc == total ? "✅ " : "";
+                return InlineKeyboardButton.WithCallbackData(
+                    $"{marca}{FechaCorta(g.Key)} · {enc}/{total}",
+                    $"{PrefijoEstatus}{tipo.ToLowerInvariant()}:{g.Key:yyyyMMdd}");
+            })
+            .Chunk(2)
+            .Select(fila => fila.ToArray())
+            .ToList();
+        filas.Add(new[] { InlineKeyboardButton.WithCallbackData("⬅️ Volver al estatus", CbEstActualizar) });
+
+        await EnviarEnPartesAsync(chatId, lineas, new InlineKeyboardMarkup(filas));
+    }
+
+    private async Task MostrarDetalleFechaAsync(long chatId, string tipo, DateTime fecha)
+    {
+        using var scope = _scopeFactory.CreateScope();
+        var servicio = scope.ServiceProvider.GetRequiredService<EstatusService>();
+        var delDia = (await servicio.ListarEvaluacionesAsync(tipo)).Where(e => e.Fecha == fecha.Date).ToList();
+
+        var icono = tipo == "TSP" ? "📝" : "📄";
+        var volver = new InlineKeyboardMarkup(new[]
+        {
+            new[] { InlineKeyboardButton.WithCallbackData($"⬅️ Volver a {tipo}", $"{PrefijoEstatus}{tipo.ToLowerInvariant()}") }
+        });
+
+        if (delDia.Count == 0)
+        {
+            await EnviarSeguroAsync(chatId, $"{icono} No hay {tipo} el {FechaCorta(fecha)} en el calendario actual.", volver);
+            return;
+        }
+
+        var faltan = delDia.Where(e => !e.Encontrado).ToList();
+        var encontrados = delDia.Where(e => e.Encontrado).ToList();
+
+        var lineas = new List<string>
+        {
+            $"{icono} <b>{tipo} · {FechaCorta(fecha)}{TextoCuando(fecha, EstatusService.HoyVenezuela())}</b> — {encontrados.Count}/{delDia.Count} encontrados"
+        };
+
+        if (faltan.Count > 0)
+        {
+            lineas.Add("");
+            lineas.Add($"<b>⏳ Faltan ({faltan.Count})</b>");
+            foreach (var e in faltan)
+                lineas.Add($"• <code>{Html(e.CodigoMateria ?? "—")}</code> {Html(e.NombreMateria)} · {Html(e.Tipo)}");
+        }
+
+        if (encontrados.Count > 0)
+        {
+            lineas.Add("");
+            lineas.Add($"<b>✅ Encontrados ({encontrados.Count})</b>");
+            foreach (var e in encontrados)
+                lineas.Add($"• <code>{Html(e.CodigoMateria ?? "—")}</code> <a href=\"{Html(e.UrlDrive)}\">{Html(e.NombreMateria)}</a> · {Html(e.Tipo)}");
+        }
+
+        await EnviarEnPartesAsync(chatId, lineas, volver);
+    }
+
+    private static InlineKeyboardMarkup BotonVolverEstatus() =>
+        new(new[] { new[] { InlineKeyboardButton.WithCallbackData("⬅️ Volver al estatus", CbEstActualizar) } });
+
+    private static string TextoCuando(DateTime fecha, DateTime hoy)
+    {
+        var dias = (fecha.Date - hoy).Days;
+        return dias switch
+        {
+            0 => " (hoy)",
+            1 => " (mañana)",
+            _ => ""
+        };
+    }
+
+    // Manda una lista de líneas en uno o varios mensajes sin pasar el límite de Telegram.
+    // Cada línea es HTML completo (abre y cierra sus etiquetas), así que se puede cortar entre líneas.
+    // El teclado inline va solo en el último mensaje.
+    private async Task EnviarEnPartesAsync(long chatId, List<string> lineas, InlineKeyboardMarkup? tecladoFinal)
+    {
+        var bloques = new List<string>();
+        var actual = new StringBuilder();
+
+        foreach (var linea in lineas)
+        {
+            if (actual.Length > 0 && actual.Length + linea.Length + 1 > MaxCaracteresMensaje)
+            {
+                bloques.Add(actual.ToString());
+                actual.Clear();
+            }
+            actual.AppendLine(linea);
+        }
+        if (actual.Length > 0) bloques.Add(actual.ToString());
+
+        for (int i = 0; i < bloques.Count; i++)
+        {
+            bool esUltimo = i == bloques.Count - 1;
+            await EnviarSeguroAsync(chatId, bloques[i], esUltimo ? tecladoFinal : null);
         }
     }
 
@@ -1037,13 +1322,16 @@ public class TelegramControlService
     {
         try
         {
+            // Sin vista previa de links: los desgloses traen enlaces de Drive y la tarjeta estorba
+            var sinVistaPrevia = new LinkPreviewOptions { IsDisabled = true };
+
             if (tecladoInline != null)
             {
-                await _botClient.SendMessage(chatId: chatId, text: html, parseMode: ParseMode.Html, replyMarkup: tecladoInline);
+                await _botClient.SendMessage(chatId: chatId, text: html, parseMode: ParseMode.Html, replyMarkup: tecladoInline, linkPreviewOptions: sinVistaPrevia);
             }
             else
             {
-                await _botClient.SendMessage(chatId: chatId, text: html, parseMode: ParseMode.Html, replyMarkup: CrearTecladoDinamico());
+                await _botClient.SendMessage(chatId: chatId, text: html, parseMode: ParseMode.Html, replyMarkup: CrearTecladoDinamico(), linkPreviewOptions: sinVistaPrevia);
             }
         }
         catch (Exception ex)

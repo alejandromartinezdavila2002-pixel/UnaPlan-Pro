@@ -707,6 +707,13 @@ app.MapPost("/api/telegram/webhook", async (
             return Results.Ok();
         }
 
+        // Desgloses del mensaje de estatus (prefijo "es:")
+        if (TelegramControlService.EsCallbackDelEstatus(update.CallbackQuery.Data))
+        {
+            await telegramService.ProcesarCallbackEstatusAsync(update.CallbackQuery);
+            return Results.Ok();
+        }
+
         // Detalles de logs: solo administradores
         if (!telegramService.EsAdmin(update.CallbackQuery.From.Id))
             return Results.Ok();

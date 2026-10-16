@@ -47,6 +47,26 @@ public class EstatusSistema
     public EstadoConvocatoria Convocatoria { get; set; } = new();
 }
 
+// Filas para los desgloses del estatus (botones bajo el mensaje)
+public class EstudianteResumen
+{
+    public string Nombre { get; set; } = "";
+    public string Correo { get; set; } = "";
+    public List<string> Materias { get; set; } = new();
+    public DateTime FechaSuscripcion { get; set; }   // UTC
+    public DateTime? FechaConvocatoria { get; set; } // UTC
+}
+
+public class EvaluacionResumen
+{
+    public DateTime Fecha { get; set; } // Día del calendario (00:00 UTC)
+    public string Tipo { get; set; } = "";
+    public string? CodigoMateria { get; set; }
+    public string NombreMateria { get; set; } = "";
+    public string? UrlDrive { get; set; }
+    public bool Encontrado => UrlDrive != null;
+}
+
 // Foto del sistema para el botón "📊 Estatus" de Telegram. Todo sale de la BD
 // (sobrevive a reinicios), salvo el contador de correos del día, que vive en memoria.
 public class EstatusService
@@ -101,6 +121,52 @@ public class EstatusService
         estatus.Convocatoria = await _periodo.ObtenerEstadoConvocatoriaAsync();
 
         return estatus;
+    }
+
+    /// <summary>Fecha de hoy en Venezuela (sin hora).</summary>
+    public static DateTime HoyVenezuela() => DateTime.UtcNow.Add(OffsetVenezuela).Date;
+
+    /// <summary>Pasa una fecha UTC de la BD a hora de Venezuela.</summary>
+    public static DateTime AVenezuela(DateTime utc) => utc.Add(OffsetVenezuela);
+
+    public Task<List<EstudianteResumen>> ListarEstudiantesAsync(CancellationToken ct = default) =>
+        _db.EstudiantesSuscritos
+            .AsNoTracking()
+            .OrderByDescending(e => e.FechaSuscripcion)
+            .Select(e => new EstudianteResumen
+            {
+                Nombre = e.Nombre,
+                Correo = e.Correo,
+                Materias = e.MateriasInscritas,
+                FechaSuscripcion = e.FechaSuscripcion,
+                FechaConvocatoria = e.FechaConvocatoria
+            })
+            .ToListAsync(ct);
+
+    /// <summary>Evaluaciones del periodo de un tipo ("TSP" o "TP"), con el link de Drive si ya se encontró.</summary>
+    public async Task<List<EvaluacionResumen>> ListarEvaluacionesAsync(string tipo, CancellationToken ct = default)
+    {
+        var filas = await _db.Evaluaciones
+            .AsNoTracking()
+            .Select(e => new EvaluacionResumen
+            {
+                Fecha = e.FechaEntrega,
+                Tipo = e.Tipo,
+                CodigoMateria = e.CodigoMateria,
+                NombreMateria = e.NombreMateria,
+                UrlDrive = e.TrabajoPublicado != null ? e.TrabajoPublicado.UrlDrive : null
+            })
+            .ToListAsync(ct);
+
+        bool esTsp = tipo.Equals("TSP", StringComparison.OrdinalIgnoreCase);
+
+        return filas
+            .Where(e => esTsp
+                ? e.Tipo.StartsWith("TSP", StringComparison.OrdinalIgnoreCase)
+                : e.Tipo.StartsWith("TP", StringComparison.OrdinalIgnoreCase))
+            .Select(e => { e.Fecha = e.Fecha.Date; return e; })
+            .OrderBy(e => e.Fecha).ThenBy(e => e.CodigoMateria)
+            .ToList();
     }
 
     private static EstatusEvaluaciones Contar(IEnumerable<(string Tipo, DateTime Fecha, bool Encontrado)> evaluaciones, DateTime hoy)
