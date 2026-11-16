@@ -3,6 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Caching.Memory;
 using Microsoft.OpenApi.Models;
 using System.Net.NetworkInformation;
+using System.Text.Encodings.Web;
+using UnaPlan.Api.Seguridad;
 using UnaPlan.Core.Entities;
 using UnaPlan.Infrastructure.Data;
 using UnaPlan.Infrastructure.Services;
@@ -19,6 +21,9 @@ using Telegram.Bot;
 var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddMemoryCache();
+
+// Claves de API, contraseña de Swagger y secreto del webhook de Telegram (ver Seguridad/SeguridadOptions.cs)
+builder.Services.AddSeguridadUnaPlan(builder.Configuration);
 
 builder.Logging.AddTelegramBot(options =>
 {
@@ -63,6 +68,22 @@ builder.Services.AddSwaggerGen(options =>
         {
             Name = "Johan Alejandro Martínez Dávila",
             Email = "singin.2002.well@gmail.com"
+        }
+    });
+
+    // Botón "Authorize": se pega la clave una vez y Swagger la manda en X-Api-Key en cada prueba
+    options.AddSecurityDefinition("ApiKey", new OpenApiSecurityScheme
+    {
+        Type = SecuritySchemeType.ApiKey,
+        In = ParameterLocation.Header,
+        Name = ApiKeyMiddleware.Cabecera,
+        Description = "Clave de API (variable Seguridad__ApiKeys)."
+    });
+    options.AddSecurityRequirement(new OpenApiSecurityRequirement
+    {
+        {
+            new OpenApiSecurityScheme { Reference = new OpenApiReference { Type = ReferenceType.SecurityScheme, Id = "ApiKey" } },
+            Array.Empty<string>()
         }
     });
 });
@@ -161,27 +182,28 @@ builder.Services.AddHostedService(sp => sp.GetRequiredService<TelegramLogDispatc
 // A partir de aquí ya no se pueden agregar más servicios al builder
 var app = builder.Build();
 
-app.UseStaticFiles(); // necesario para servir wwwroot
+// Fuera de Development, si falta una clave obligatoria la API no arranca (falla cerrado)
+app.ValidarSeguridad();
 
+app.UseStaticFiles(); // necesario para servir wwwroot (solo el CSS de Swagger, nada sensible)
+
+// Swagger (página y swagger.json) pide usuario y contraseña. Tiene que ir antes de UseSwagger.
+// Antes había un segundo bloque de Swagger solo para Development que registraba los middlewares
+// dos veces; se quitó porque nunca llegaba a usarse (el primero ya respondía).
+app.UseSwaggerProtegido();
 app.UseSwagger();
 app.UseSwaggerUI(c =>
 {
+    // Sin EnablePersistAuthorization a propósito: guardaría la clave de API en el localStorage del navegador.
     c.InjectStylesheet("/swagger-ui/custom.css");
 });
 
-if (app.Environment.IsDevelopment())
-{
-    app.UseSwagger();
-    app.UseSwaggerUI(c => {
-        c.SwaggerEndpoint("/swagger/v1/swagger.json", "UnaPlan API v1");
-
-        // Tema oscuro en Swagger
-        c.InjectStylesheet("https://cdn.jsdelivr.net/npm/swagger-ui-themes@3.0.1/themes/3.x/theme-monokai.css");
-        c.HeadContent = "<style>body { background-color: #1b1b1b !important; } .swagger-ui .info .title { color: #ffffff !important; }</style>";
-    });
-}
-
 app.UseHttpsRedirection();
+
+// X-Api-Key en todos los endpoints salvo los marcados con .SinApiKey(). Va después de UseRouting
+// para decidir por endpoint y no por el texto de la URL.
+app.UseRouting();
+app.UseApiKey();
 
 // Endpoint: previsualizar
 app.MapPost("/api/calendarios/preview", async (IFormFile archivoPdf, PeriodoAcademicoService periodo) =>
@@ -469,33 +491,11 @@ app.MapPost("/api/estudiantes/solicitar-plan", async (
 
 
 
-// Lo dispara GitHub Actions una vez por semana. Si hay token configurado exigimos la cabecera
-// X-Sync-Token; sin token el endpoint queda abierto, como estaba antes.
-// En Render la variable de entorno puede llamarse "Cartelera__SyncToken" (doble guion bajo,
-// que es como .NET mapea la clave anidada) o "CARTELERA_SYNC_TOKEN"; aceptamos las dos.
-app.MapPost("/api/notion/sync-cartelera", async (
-    NotionPublisherService publisherService,
-    IConfiguration config,
-    HttpRequest request,
-    ILogger<Program> logger) =>
+// Lo dispara GitHub Actions una vez por semana (cartelera-semanal.yml) con la cabecera X-Api-Key.
+// Antes tenía su propio X-Sync-Token que quedaba abierto si faltaba la variable; ahora lo cubre
+// la clave de API como a todos, y sin clave configurada la API ni arranca.
+app.MapPost("/api/notion/sync-cartelera", async (NotionPublisherService publisherService) =>
 {
-    var tokenEsperado = config["Cartelera:SyncToken"] ?? config["CARTELERA_SYNC_TOKEN"];
-
-    if (!string.IsNullOrWhiteSpace(tokenEsperado))
-    {
-        var tokenRecibido = request.Headers["X-Sync-Token"].ToString();
-
-        if (!string.Equals(tokenRecibido, tokenEsperado, StringComparison.Ordinal))
-        {
-            logger.LogWarning("🔒 Intento de sincronizar la Cartelera con un token inválido o ausente.");
-            return Results.Unauthorized();
-        }
-    }
-    else
-    {
-        logger.LogWarning("⚠️ 'Cartelera:SyncToken' no está configurado: el endpoint de sincronización está abierto.");
-    }
-
     await publisherService.SincronizarCarteleraAsync();
     return Results.Ok(new { mensaje = "Cartelera sincronizada correctamente con Notion." });
 })
@@ -505,11 +505,22 @@ app.MapPost("/api/notion/sync-cartelera", async (
 
 
 
-// Excel no deja poner links de Drive directo en una celda, así que redirige por acá
-app.MapGet("/api/go", (string target) =>
+// Excel no deja poner links de Drive directo en una celda, así que redirige por acá.
+// Público (.SinApiKey): lo abren los estudiantes desde el Excel. Por eso solo acepta enlaces https de
+// Google Drive/Docs (todos los de PlanesDeCurso y MaterialesDeApoyo son de drive.google.com) y escapa
+// la URL: antes cualquiera podía usar nuestro dominio para redirigir a una página falsa o meter un script.
+string[] hostsPermitidosGo = ["drive.google.com", "docs.google.com"];
+
+app.MapGet("/api/go", (string? target) =>
 {
-    if (string.IsNullOrEmpty(target))
+    if (string.IsNullOrWhiteSpace(target) ||
+        !Uri.TryCreate(target, UriKind.Absolute, out var destino) ||
+        destino.Scheme != Uri.UriSchemeHttps ||
+        !hostsPermitidosGo.Contains(destino.IdnHost, StringComparer.OrdinalIgnoreCase))
         return Results.BadRequest("URL no válida");
+
+    var urlHtml = HtmlEncoder.Default.Encode(destino.AbsoluteUri);
+    var urlJs = JavaScriptEncoder.Default.Encode(destino.AbsoluteUri);
 
     // Creamos una página web invisible que Excel sí acepta
     string html = $@"
@@ -517,34 +528,29 @@ app.MapGet("/api/go", (string target) =>
     <html lang='es'>
     <head>
         <meta charset='UTF-8'>
-        <meta http-equiv='refresh' content='0; url={target}'>
-        <script>window.location.replace('{target}');</script>
+        <meta http-equiv='refresh' content='0; url={urlHtml}'>
+        <script>window.location.replace('{urlJs}');</script>
         <title>Redirigiendo...</title>
     </head>
     <body style='font-family: Arial, sans-serif; text-align: center; margin-top: 50px;'>
         <h2>Abriendo Google Drive... 🚀</h2>
-        <p>Cargando tu material de la UNA. Si no abre en 3 segundos, <a href='{target}'>haz clic aquí</a>.</p>
+        <p>Cargando tu material de la UNA. Si no abre en 3 segundos, <a href='{urlHtml}'>haz clic aquí</a>.</p>
     </body>
     </html>";
 
     return Results.Content(html, "text/html");
 })
+.SinApiKey()
 .ExcludeFromDescription(); // Esto hace que no se muestre en Swagger para mantenerlo limpio
 
 
 
-// Endpoint para despertar la API (útil para Render y para monitoreo)
+// Endpoint para despertar la API (útil para Render y para monitoreo).
+// Público (.SinApiKey): lo llaman keep-alive.yml cada 14 min y cartelera-semanal.yml. No devuelve datos.
 app.MapGet("/api/ping", () => Results.Ok(new { mensaje = "API Despierta y lista" }))
+   .SinApiKey()
    .ExcludeFromDescription();
 
-
-//// Endpoint para sincronizar la cartelera de Notion (puede ser llamado por el Worker o manualmente)
-//app.MapPost("/api/notion/sync-cartelera", async (NotionPublisherService publisherService) =>
-//{
-//    await publisherService.SincronizarCarteleraAsync();
-//    return Results.Ok(new { mensaje = "Cartelera sincronizada correctamente con Notion." });
-//})
-//.ExcludeFromDescription();
 
 // Panel de administración - CRM de retención de estudiantes
 
@@ -678,13 +684,27 @@ app.Lifetime.ApplicationStarted.Register(() =>
     _ = telegramControl.EnviarPanelDeControlAsync();
 });
 
-// Webhook de Telegram: recibe los mensajes y los clicks en botones
+// Webhook de Telegram: recibe los mensajes y los clicks en botones.
+// No usa X-Api-Key (.SinApiKey) porque Telegram no la manda: en su lugar valida el secreto con el que
+// se registró el webhook, que Telegram envía en X-Telegram-Bot-Api-Secret-Token en cada update.
 app.MapPost("/api/telegram/webhook", async (
-    [FromBody] Telegram.Bot.Types.Update update,
+    HttpRequest request,
+    SeguridadOptions seguridad,
+    LimiteIntentos limite,
     TelegramControlService telegramService,
     Microsoft.Extensions.Caching.Memory.IMemoryCache cache,
     IConfiguration config) =>
 {
+    if (!seguridad.SecretoTelegramValido(request.Headers["X-Telegram-Bot-Api-Secret-Token"].ToString()))
+    {
+        limite.RegistrarFallo(LimiteIntentos.IpCliente(request.HttpContext), "webhook de Telegram sin secreto válido");
+        return Results.Unauthorized();
+    }
+
+    // El cuerpo se lee después del secreto: así nadie de afuera llega a deserializar un Update
+    var update = await request.ReadFromJsonAsync<Telegram.Bot.Types.Update>(Telegram.Bot.JsonBotAPI.Options);
+    if (update == null) return Results.BadRequest();
+
     // Telegram reintenta el mismo update si no recibe 200 a tiempo, así que lo procesamos una sola vez
     // (evita, por ejemplo, disparar dos veces el reinicio de semestre)
     var claveUpdate = $"tg-update:{update.Id}";
@@ -759,11 +779,13 @@ app.MapPost("/api/telegram/webhook", async (
     // Telegram siempre espera un 200 OK para saber que recibimos el mensaje
     return Results.Ok();
 })
+.SinApiKey()
 .ExcludeFromDescription(); // No lo mostramos en Swagger por seguridad
 
 
-// Registra la URL del webhook en Telegram (se llama una sola vez)
-app.MapGet("/api/telegram/register-webhook", async (IConfiguration config) =>
+// Registra la URL del webhook en Telegram junto con el secreto (se llama una vez, y otra vez si cambia
+// Telegram__WebhookSecret). Exige X-Api-Key como todo lo demás.
+app.MapGet("/api/telegram/register-webhook", async (IConfiguration config, SeguridadOptions seguridad) =>
 {
     try 
     {
@@ -778,7 +800,11 @@ app.MapGet("/api/telegram/register-webhook", async (IConfiguration config) =>
 
         Console.WriteLine($"Registrando Webhook en: {webhookUrl}");
 
-        await botClient.SetWebhook(webhookUrl);
+        if (seguridad.TelegramWebhookSecret == null)
+            return Results.Problem("Telegram:WebhookSecret no está configurado en las variables de entorno.");
+
+        // Desde ahora Telegram manda este secreto en cada update y el webhook rechaza lo que no lo traiga
+        await botClient.SetWebhook(webhookUrl, secretToken: seguridad.TelegramWebhookSecret);
 
         return Results.Ok($"Webhook registrado exitosamente en: {webhookUrl}");
     }

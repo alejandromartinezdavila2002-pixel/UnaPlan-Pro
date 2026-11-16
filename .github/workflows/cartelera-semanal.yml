@@ -23,8 +23,9 @@ jobs:
           curl -fsS --max-time 120 --retry 5 --retry-delay 15 --retry-connrefused \
             https://unaplanapi.onrender.com/api/ping
 
+      # La API exige X-Api-Key (una de las claves de Seguridad__ApiKeys en Render).
       - name: Sincronizar la Cartelera con Notion
         run: |
           curl -fsS --max-time 300 -X POST \
-            -H "X-Sync-Token: ${{ secrets.CARTELERA_SYNC_TOKEN }}" \
+            -H "X-Api-Key: ${{ secrets.UNAPLAN_API_KEY }}" \
             https://unaplanapi.onrender.com/api/notion/sync-cartelera
